@@ -32,3 +32,11 @@ cargo run --release
 ```
 
 The runner is configured for `probe-rs run --chip RP235x`.
+
+Host-side bit-perfect loopback checks live in
+[tools/loopback-check](tools/loopback-check). With the target USB connected:
+
+```powershell
+cargo loopback-check -- list
+cargo loopback-check -- test --rate 48000 --bits 16 --seconds 3
+```

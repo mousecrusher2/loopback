@@ -1,6 +1,10 @@
 [build]
 target = "thumbv8m.main-none-eabihf"
 
+[alias]
+loopback-check = "run --target x86_64-pc-windows-msvc -p loopback-check"
+loopback-check-build = "build --target x86_64-pc-windows-msvc -p loopback-check"
+
 [target.thumbv8m.main-none-eabihf]
 runner = "probe-rs run --chip RP235x"
 rustflags = [

@@ -3,6 +3,10 @@ name = "pico2-uac1-loopback"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = [".", "tools/loopback-check"]
+resolver = "3"
+
 [dependencies]
 cortex-m-rt = "0.7.5"
 embassy-executor = { version = "0.10.0", features = ["executor-thread", "platform-cortex-m"] }
