@@ -1,0 +1,5 @@
+/target/
+/.probe-rs/
+*.elf
+*.bin
+*.uf2
