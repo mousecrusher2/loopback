@@ -10,8 +10,14 @@ embassy-futures = "0.1.2"
 embassy-rp = { version = "0.10.0", features = ["binary-info", "critical-section-impl", "imagedef-secure-exe", "rp235xa", "time-driver"] }
 embassy-sync = "0.8.0"
 embassy-usb = { version = "0.6.0", default-features = false, features = ["max-handler-count-1", "max-interface-count-4"] }
+embedded-test = "0.7.1"
 panic-halt = "1"
 static_cell = "2"
+
+[[bin]]
+name = "pico2-uac1-loopback"
+path = "src/main.rs"
+harness = false
 
 [profile.dev]
 codegen-units = 1

@@ -16,6 +16,15 @@ Build:
 cargo build --release
 ```
 
+Run the embedded unit tests over the debug probe:
+
+```powershell
+cargo test --bin pico2-uac1-loopback
+```
+
+These tests flash a test firmware through `probe-rs`. They do not require the
+target USB port to be connected.
+
 Flash/run with `probe-rs`:
 
 ```powershell

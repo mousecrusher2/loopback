@@ -1,8 +1,10 @@
 #![no_main]
 #![no_std]
+#![cfg_attr(test, allow(dead_code, unused_imports))]
 
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
+#[cfg(not(test))]
 use embassy_executor::Spawner;
 use embassy_futures::join::join3;
 use embassy_rp::{bind_interrupts, peripherals, usb};
@@ -15,6 +17,7 @@ use embassy_usb::driver::{
 };
 use embassy_usb::types::InterfaceNumber;
 use embassy_usb::{Builder, Config, InterfaceAltBuilder};
+#[cfg(not(test))]
 use panic_halt as _;
 use static_cell::StaticCell;
 
@@ -53,6 +56,7 @@ const CHANNEL_COUNT: u8 = 2;
 const SAMPLE_WIDTH_16_ALT: u8 = 1;
 const SAMPLE_WIDTH_24_ALT: u8 = 2;
 const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
 const MAX_PACKET_SIZE_16: usize = 96_000 / 1_000 * CHANNEL_COUNT as usize * 2;
 const MAX_PACKET_SIZE_24: usize = 96_000 / 1_000 * CHANNEL_COUNT as usize * 3;
 const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24;
@@ -634,7 +638,7 @@ fn closest_supported_rate(rate: u32) -> u32 {
     let mut closest = 44_100u32;
     let mut closest_diff = closest.abs_diff(rate);
 
-    for candidate in [48_000u32, 88_200, 96_000] {
+    for candidate in SUPPORTED_SAMPLE_RATES.iter().copied().skip(1) {
         let diff = candidate.abs_diff(rate);
         if diff < closest_diff {
             closest = candidate;
@@ -645,6 +649,104 @@ fn closest_supported_rate(rate: u32) -> u32 {
     closest
 }
 
+#[cfg(test)]
+#[embedded_test::tests]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_width_alt_settings_map_to_audio_frame_sizes() {
+        assert_eq!(bytes_per_audio_frame(0), 0);
+        assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_16_ALT), 4);
+        assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_24_ALT), 6);
+        assert_eq!(bytes_per_audio_frame(3), 0);
+    }
+
+    #[test]
+    fn unsupported_sample_rates_round_to_nearest_supported_rate() {
+        assert_eq!(closest_supported_rate(44_100), 44_100);
+        assert_eq!(closest_supported_rate(48_000), 48_000);
+        assert_eq!(closest_supported_rate(88_200), 88_200);
+        assert_eq!(closest_supported_rate(96_000), 96_000);
+        assert_eq!(closest_supported_rate(45_000), 44_100);
+        assert_eq!(closest_supported_rate(50_000), 48_000);
+        assert_eq!(closest_supported_rate(90_000), 88_200);
+        assert_eq!(closest_supported_rate(95_000), 96_000);
+    }
+
+    #[test]
+    fn packet_clock_emits_fractional_44k1_cadence() {
+        let mut clock = PacketClock::new();
+        let mut total = 0;
+
+        for index in 0..10 {
+            let len = clock.next_len(44_100, bytes_per_audio_frame(SAMPLE_WIDTH_16_ALT));
+            total += len;
+            if index == 9 {
+                assert_eq!(len, 45 * 4);
+            } else {
+                assert_eq!(len, 44 * 4);
+            }
+        }
+
+        assert_eq!(total, 441 * 4);
+    }
+
+    #[test]
+    fn packet_clock_emits_fractional_88k2_cadence() {
+        let mut clock = PacketClock::new();
+        let mut total = 0;
+
+        for index in 0..5 {
+            let len = clock.next_len(88_200, bytes_per_audio_frame(SAMPLE_WIDTH_24_ALT));
+            total += len;
+            if index == 4 {
+                assert_eq!(len, 89 * 6);
+            } else {
+                assert_eq!(len, 88 * 6);
+            }
+        }
+
+        assert_eq!(total, 441 * 6);
+    }
+
+    #[test]
+    fn packet_clock_resets_fractional_state_when_format_changes() {
+        let mut clock = PacketClock::new();
+
+        assert_eq!(
+            clock.next_len(44_100, bytes_per_audio_frame(SAMPLE_WIDTH_16_ALT)),
+            44 * 4
+        );
+        assert_eq!(
+            clock.next_len(48_000, bytes_per_audio_frame(SAMPLE_WIDTH_16_ALT)),
+            48 * 4
+        );
+        assert_eq!(
+            clock.next_len(48_000, bytes_per_audio_frame(SAMPLE_WIDTH_24_ALT)),
+            48 * 6
+        );
+    }
+
+    #[test]
+    fn loopback_only_matches_identical_active_formats() {
+        let state = AudioState::new();
+        assert!(!state.loopback_format_matches());
+
+        state.out_alt.store(SAMPLE_WIDTH_16_ALT, Ordering::Relaxed);
+        state.in_alt.store(SAMPLE_WIDTH_16_ALT, Ordering::Relaxed);
+        assert!(state.loopback_format_matches());
+
+        state.in_alt.store(SAMPLE_WIDTH_24_ALT, Ordering::Relaxed);
+        assert!(!state.loopback_format_matches());
+
+        state.in_alt.store(SAMPLE_WIDTH_16_ALT, Ordering::Relaxed);
+        state.in_rate_hz.store(44_100, Ordering::Relaxed);
+        assert!(!state.loopback_format_matches());
+    }
+}
+
+#[cfg(not(test))]
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
