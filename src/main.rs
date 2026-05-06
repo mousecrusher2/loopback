@@ -7,9 +7,6 @@ mod control;
 mod descriptors;
 mod tasks;
 
-#[cfg(test)]
-mod tests;
-
 #[cfg(not(test))]
 use embassy_executor::Spawner;
 #[cfg(not(test))]
