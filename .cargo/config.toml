@@ -10,12 +10,4 @@ runner = "probe-rs run --chip RP235x"
 rustflags = [
   "-C",
   "target-cpu=cortex-m33",
-  "-L",
-  ".",
-  "-C",
-  "link-arg=--nmagic",
-  "-C",
-  "link-arg=-Tlink.x",
-  "-C",
-  "link-arg=-Tembedded-test.x",
 ]
