@@ -2,7 +2,8 @@ use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestT
 use embassy_usb::types::InterfaceNumber;
 
 use crate::audio::{AudioState, StreamDirection, closest_supported_rate};
-use crate::tasks::AudioPipe;
+use crate::diag;
+use crate::tasks::{AudioPipe, PacketLenQueue};
 
 const SET_CUR: u8 = 0x01;
 const GET_CUR: u8 = 0x81;
@@ -14,35 +15,38 @@ const SAMPLING_FREQ_CONTROL: u8 = 0x01;
 pub struct AudioControlHandler {
     state: &'static AudioState,
     pipe: &'static AudioPipe,
+    packet_lens: &'static PacketLenQueue,
     out_streaming_if: InterfaceNumber,
     in_streaming_if: InterfaceNumber,
-    out_ep_addr: u8,
-    in_ep_addr: u8,
+    out_ep_addrs: [u8; 2],
+    in_ep_addrs: [u8; 2],
 }
 
 impl AudioControlHandler {
     pub fn new(
         state: &'static AudioState,
         pipe: &'static AudioPipe,
+        packet_lens: &'static PacketLenQueue,
         out_streaming_if: InterfaceNumber,
         in_streaming_if: InterfaceNumber,
-        out_ep_addr: u8,
-        in_ep_addr: u8,
+        out_ep_addrs: [u8; 2],
+        in_ep_addrs: [u8; 2],
     ) -> Self {
         Self {
             state,
             pipe,
+            packet_lens,
             out_streaming_if,
             in_streaming_if,
-            out_ep_addr,
-            in_ep_addr,
+            out_ep_addrs,
+            in_ep_addrs,
         }
     }
 
     fn direction_for_endpoint(&self, ep_addr: u8) -> Option<StreamDirection> {
-        if ep_addr == self.out_ep_addr {
+        if self.out_ep_addrs.contains(&ep_addr) {
             Some(StreamDirection::Out)
-        } else if ep_addr == self.in_ep_addr {
+        } else if self.in_ep_addrs.contains(&ep_addr) {
             Some(StreamDirection::In)
         } else {
             None
@@ -63,13 +67,23 @@ impl AudioControlHandler {
 impl embassy_usb::Handler for AudioControlHandler {
     fn reset(&mut self) {
         self.state.reset();
+        diag::set_out_alt(0);
+        diag::set_in_alt(0);
+        diag::set_out_rate(0);
+        diag::set_in_rate(0);
         self.pipe.clear();
+        self.packet_lens.clear();
     }
 
     fn set_alternate_setting(&mut self, iface: InterfaceNumber, alternate_setting: u8) {
         if let Some(direction) = self.direction_for_interface(iface) {
             self.state.set_alt(direction, alternate_setting);
+            match direction {
+                StreamDirection::Out => diag::set_out_alt(alternate_setting),
+                StreamDirection::In => diag::set_in_alt(alternate_setting),
+            }
             self.pipe.clear();
+            self.packet_lens.clear();
         }
     }
 
@@ -92,9 +106,14 @@ impl embassy_usb::Handler for AudioControlHandler {
         }
 
         let requested = u32::from(data[0]) | (u32::from(data[1]) << 8) | (u32::from(data[2]) << 16);
-        self.state
-            .set_rate_hz(direction, closest_supported_rate(requested));
+        let rate = closest_supported_rate(requested);
+        self.state.set_rate_hz(direction, rate);
+        match direction {
+            StreamDirection::Out => diag::set_out_rate(rate),
+            StreamDirection::In => diag::set_in_rate(rate),
+        }
         self.pipe.clear();
+        self.packet_lens.clear();
         Some(OutResponse::Accepted)
     }
 

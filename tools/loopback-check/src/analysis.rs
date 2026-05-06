@@ -10,7 +10,8 @@ pub fn analyze(
     let sync_len = expected
         .len()
         .min(config.bytes_per_frame() * (config.rate as usize / 10).max(256));
-    let sync_found_at = find_subslice(captured, &expected[..sync_len]);
+    let sync_found_at = find_subslice(captured, &expected[..sync_len])
+        .or_else(|| find_short_frame_aligned_sync(config, expected, captured));
     let (compared_bytes, mismatched_bytes, missing_bytes, first_mismatch) =
         if let Some(offset) = sync_found_at {
             compare_at_offset(expected, captured, offset)
@@ -41,6 +42,54 @@ pub fn analyze(
         capture_stats,
         render_stats,
     }
+}
+
+fn find_short_frame_aligned_sync(
+    config: &AudioConfig,
+    expected: &[u8],
+    captured: &[u8],
+) -> Option<usize> {
+    let bytes_per_frame = config.bytes_per_frame();
+    if bytes_per_frame == 0 || expected.len() < bytes_per_frame || captured.len() < bytes_per_frame
+    {
+        return None;
+    }
+
+    let window_frames = (config.rate as usize / 50).max(64);
+    let window_len = expected.len().min(window_frames * bytes_per_frame);
+    if captured.len() < window_len {
+        return None;
+    }
+
+    let prefix_len = window_len.min(bytes_per_frame * 8);
+    let max_mismatches = (window_len / 100).max(bytes_per_frame);
+    let mut best = None;
+    for offset in (0..=captured.len() - window_len).step_by(bytes_per_frame) {
+        if captured[offset..offset + prefix_len] != expected[..prefix_len] {
+            continue;
+        }
+
+        let mut mismatches = 0;
+        for index in 0..window_len {
+            if captured[offset + index] != expected[index] {
+                mismatches += 1;
+                if mismatches > max_mismatches {
+                    break;
+                }
+            }
+        }
+        if mismatches <= max_mismatches
+            && best
+                .map(|(best_mismatches, _)| mismatches < best_mismatches)
+                .unwrap_or(true)
+        {
+            best = Some((mismatches, offset));
+            if mismatches == 0 {
+                break;
+            }
+        }
+    }
+    best.map(|(_, offset)| offset)
 }
 
 fn compare_at_offset(
@@ -103,4 +152,52 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pattern::generate_pattern;
+    use crate::types::{StreamStats, StreamTiming};
+
+    fn config() -> AudioConfig {
+        AudioConfig {
+            rate: 48_000,
+            bits: 24,
+            seconds: 1.0,
+            timing: StreamTiming::Polling,
+            period_ms: 10.0,
+            buffer_periods: 4,
+            pre_roll_ms: 250,
+            tail_ms: 500,
+        }
+    }
+
+    fn stats() -> StreamStats {
+        StreamStats {
+            frames: 0,
+            discontinuities: 0,
+            silent_buffers: 0,
+            timestamp_errors: 0,
+            buffer_frames: 0,
+            period_hns: 0,
+        }
+    }
+
+    #[test]
+    fn short_sync_finds_offset_when_later_payload_has_a_gap() {
+        let config = config();
+        let expected = generate_pattern(&config);
+        let offset = 31 * config.bytes_per_frame();
+        let mut captured = vec![0; offset];
+        captured.extend_from_slice(&expected);
+        captured[offset + config.bytes_per_frame() * 4_000] ^= 0x55;
+
+        let report = analyze(&config, &expected, &captured, stats(), stats());
+
+        assert!(report.sync_found);
+        assert_eq!(report.latency_frames, Some(31));
+        assert!(!report.exact);
+        assert_eq!(report.mismatched_bytes, 1);
+    }
 }

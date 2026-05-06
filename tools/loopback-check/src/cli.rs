@@ -4,6 +4,12 @@ use clap::{Parser, Subcommand};
 
 use crate::types::{DEFAULT_BUFFER_PERIODS, DEFAULT_DEVICE_QUERY, DEFAULT_PERIOD_MS};
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum TimingArg {
+    Polling,
+    Events,
+}
+
 #[derive(Parser)]
 #[command(
     author,
@@ -19,10 +25,27 @@ pub struct Cli {
 pub enum Command {
     /// List active Windows audio endpoints.
     List,
-    /// Test one exact PCM format in WASAPI exclusive polling mode.
+    /// Activate the selected render and capture endpoints without streaming.
+    Probe(ProbeArgs),
+    /// Test one exact PCM format in WASAPI exclusive mode.
     Test(TestArgs),
     /// Test all firmware formats.
     Matrix(MatrixArgs),
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct ProbeArgs {
+    /// Substring matched against friendly name, interface name, description, or endpoint id.
+    #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
+    pub device: String,
+
+    /// Exact WASAPI render endpoint id. Overrides --device for playback.
+    #[arg(long)]
+    pub render_id: Option<String>,
+
+    /// Exact WASAPI capture endpoint id. Overrides --device for recording.
+    #[arg(long)]
+    pub capture_id: Option<String>,
 }
 
 #[derive(clap::Args, Clone, Debug)]
@@ -35,6 +58,10 @@ pub struct TestArgs {
 
     #[arg(long, default_value_t = 3.0)]
     pub seconds: f64,
+
+    /// WASAPI exclusive timing mode.
+    #[arg(long, value_enum, default_value_t = TimingArg::Polling)]
+    pub timing: TimingArg,
 
     /// Substring matched against friendly name, interface name, description, or endpoint id.
     #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
@@ -73,6 +100,9 @@ pub struct TestArgs {
 pub struct MatrixArgs {
     #[arg(long, default_value_t = 3.0)]
     pub seconds: f64,
+
+    #[arg(long, value_enum, default_value_t = TimingArg::Polling)]
+    pub timing: TimingArg,
 
     #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
     pub device: String,

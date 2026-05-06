@@ -3,7 +3,7 @@ use embassy_usb::driver::{Driver, Endpoint, EndpointInfo, EndpointType};
 use embassy_usb::types::InterfaceNumber;
 use embassy_usb::{Builder, InterfaceAltBuilder};
 
-use crate::audio::{CHANNEL_COUNT, MAX_PACKET_SIZE, MAX_PACKET_SIZE_16, MAX_PACKET_SIZE_24};
+use crate::audio::{CHANNEL_COUNT, MAX_PACKET_SIZE_16, MAX_PACKET_SIZE_24};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIO_CONTROL: u8 = 0x01;
@@ -33,12 +33,14 @@ const IN_MIC_TERMINAL_ID: u8 = 3;
 const IN_USB_TERMINAL_ID: u8 = 4;
 
 pub struct AudioEndpoints<'d, D: Driver<'d>> {
-    pub out_ep: D::EndpointOut,
-    pub in_ep: D::EndpointIn,
+    pub out_ep16: D::EndpointOut,
+    pub out_ep24: D::EndpointOut,
+    pub in_ep16: D::EndpointIn,
+    pub in_ep24: D::EndpointIn,
     pub out_streaming_if: InterfaceNumber,
     pub in_streaming_if: InterfaceNumber,
-    pub out_ep_addr: u8,
-    pub in_ep_addr: u8,
+    pub out_ep_addrs: [u8; 2],
+    pub in_ep_addrs: [u8; 2],
 }
 
 pub fn build_audio_function<'d, D: Driver<'d>>(
@@ -64,8 +66,10 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
         write_audio_control_descriptors(&mut alt, out_streaming_if_number, in_streaming_if_number);
     }
 
-    let out_ep;
-    let out_info;
+    let out_ep16;
+    let out_ep24;
+    let out_info16;
+    let out_info24;
     let out_streaming_if;
     {
         let mut out_if = function.interface();
@@ -87,16 +91,16 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 None,
             );
             write_streaming_descriptors(&mut alt16, OUT_USB_TERMINAL_ID, 2, 16);
-            out_ep = alt16.alloc_endpoint_out(
+            out_ep16 = alt16.alloc_endpoint_out(
                 EndpointType::Isochronous,
                 None,
-                MAX_PACKET_SIZE as u16,
+                MAX_PACKET_SIZE_16 as u16,
                 1,
             );
-            out_info = *out_ep.info();
+            out_info16 = *out_ep16.info();
             write_audio_data_endpoint(
                 &mut alt16,
-                &out_info,
+                &out_info16,
                 MAX_PACKET_SIZE_16 as u16,
                 SynchronizationType::Synchronous,
             );
@@ -110,9 +114,16 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 None,
             );
             write_streaming_descriptors(&mut alt24, OUT_USB_TERMINAL_ID, 3, 24);
+            out_ep24 = alt24.alloc_endpoint_out(
+                EndpointType::Isochronous,
+                None,
+                MAX_PACKET_SIZE_24 as u16,
+                1,
+            );
+            out_info24 = *out_ep24.info();
             write_audio_data_endpoint(
                 &mut alt24,
-                &out_info,
+                &out_info24,
                 MAX_PACKET_SIZE_24 as u16,
                 SynchronizationType::Synchronous,
             );
@@ -131,8 +142,10 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
         );
     }
 
-    let in_ep;
-    let in_info;
+    let in_ep16;
+    let in_ep24;
+    let in_info16;
+    let in_info24;
     {
         let mut alt16 = in_if.alt_setting(
             USB_CLASS_AUDIO,
@@ -141,11 +154,16 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             None,
         );
         write_streaming_descriptors(&mut alt16, IN_USB_TERMINAL_ID, 2, 16);
-        in_ep = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE as u16, 1);
-        in_info = *in_ep.info();
+        in_ep16 = alt16.alloc_endpoint_in(
+            EndpointType::Isochronous,
+            None,
+            MAX_PACKET_SIZE_16 as u16,
+            1,
+        );
+        in_info16 = *in_ep16.info();
         write_audio_data_endpoint(
             &mut alt16,
-            &in_info,
+            &in_info16,
             MAX_PACKET_SIZE_16 as u16,
             SynchronizationType::Synchronous,
         );
@@ -159,9 +177,16 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             None,
         );
         write_streaming_descriptors(&mut alt24, IN_USB_TERMINAL_ID, 3, 24);
+        in_ep24 = alt24.alloc_endpoint_in(
+            EndpointType::Isochronous,
+            None,
+            MAX_PACKET_SIZE_24 as u16,
+            1,
+        );
+        in_info24 = *in_ep24.info();
         write_audio_data_endpoint(
             &mut alt24,
-            &in_info,
+            &in_info24,
             MAX_PACKET_SIZE_24 as u16,
             SynchronizationType::Synchronous,
         );
@@ -169,12 +194,14 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
     }
 
     AudioEndpoints {
-        out_ep,
-        in_ep,
+        out_ep16,
+        out_ep24,
+        in_ep16,
+        in_ep24,
         out_streaming_if,
         in_streaming_if,
-        out_ep_addr: u8::from(out_info.addr),
-        in_ep_addr: u8::from(in_info.addr),
+        out_ep_addrs: [u8::from(out_info16.addr), u8::from(out_info24.addr)],
+        in_ep_addrs: [u8::from(in_info16.addr), u8::from(in_info24.addr)],
     }
 }
 

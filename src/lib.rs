@@ -5,5 +5,6 @@
 pub mod audio;
 pub mod control;
 pub mod descriptors;
+pub mod diag;
 pub mod irq;
 pub mod tasks;

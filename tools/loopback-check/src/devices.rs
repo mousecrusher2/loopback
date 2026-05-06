@@ -20,51 +20,63 @@ pub fn list_command() -> Result<()> {
 }
 
 pub fn select_device(direction: Direction, selector: &DeviceSelector) -> Result<Device> {
-    let enumerator = DeviceEnumerator::new()?;
     let id = match direction {
         Direction::Render => selector.render_id.as_ref(),
         Direction::Capture => selector.capture_id.as_ref(),
     };
+
+    let devices = active_devices(direction)?;
     if let Some(id) = id {
-        return enumerator
-            .get_device(id)
-            .with_context(|| format!("open {direction:?} endpoint id {id}"));
+        for selected in devices {
+            if selected.summary.id == *id {
+                return Ok(selected.device);
+            }
+        }
+        bail!("no active {direction:?} endpoint id {id}");
     }
 
-    let summaries = list_devices(direction)?;
     let query = selector.query.to_ascii_lowercase();
-    let matches: Vec<_> = summaries
-        .iter()
-        .filter(|device| {
+    let mut matches = Vec::new();
+    let mut names = Vec::new();
+    for selected in devices {
+        names.push(format!(
+            "  {} ({})",
+            selected.summary.friendly_name, selected.summary.id
+        ));
+        let is_match = {
             let haystack = format!(
                 "{}\n{}\n{}\n{}",
-                device.id, device.friendly_name, device.interface_name, device.description
+                selected.summary.id,
+                selected.summary.friendly_name,
+                selected.summary.interface_name,
+                selected.summary.description
             )
             .to_ascii_lowercase();
             haystack.contains(&query)
-        })
-        .collect();
+        };
+        if is_match {
+            matches.push(selected);
+        }
+    }
 
     match matches.as_slice() {
-        [device] => enumerator
-            .get_device(&device.id)
-            .with_context(|| format!("open selected {direction:?} endpoint")),
+        [_] => Ok(matches.remove(0).device),
         [] => {
-            let names = summaries
-                .iter()
-                .map(|device| format!("  {} ({})", device.friendly_name, device.id))
-                .collect::<Vec<_>>()
-                .join("\n");
             bail!(
                 "no {direction:?} endpoint matched {:?}\n{}",
                 selector.query,
-                names
+                names.join("\n")
             )
         }
         many => {
             let names = many
                 .iter()
-                .map(|device| format!("  {} ({})", device.friendly_name, device.id))
+                .map(|device| {
+                    format!(
+                        "  {} ({})",
+                        device.summary.friendly_name, device.summary.id
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             bail!(
@@ -81,26 +93,59 @@ pub fn select_device(direction: Direction, selector: &DeviceSelector) -> Result<
     }
 }
 
-fn list_devices(direction: Direction) -> Result<Vec<DeviceSummary>> {
+struct SelectedDevice {
+    device: Device,
+    summary: DeviceSummary,
+}
+
+fn active_devices(direction: Direction) -> Result<Vec<SelectedDevice>> {
     let enumerator = DeviceEnumerator::new()?;
     let collection = enumerator.get_device_collection(&direction)?;
     let mut devices = Vec::new();
     for device in &collection {
         let device = device?;
-        let format = device
-            .get_device_format()
-            .ok()
-            .map(|format| describe_format(&format));
-        devices.push(DeviceSummary {
-            direction: format!("{direction:?}"),
-            id: device.get_id()?,
-            friendly_name: device.get_friendlyname()?,
-            interface_name: device.get_interface_friendlyname().unwrap_or_default(),
-            description: device.get_description().unwrap_or_default(),
-            device_format: format,
-        });
+        let summary = summarize_device(direction, &device)?;
+        devices.push(SelectedDevice { device, summary });
     }
     Ok(devices)
+}
+
+pub fn probe_command(selector: &DeviceSelector) -> Result<()> {
+    for direction in [Direction::Render, Direction::Capture] {
+        let device = select_device(direction, selector)?;
+        let client = device
+            .get_iaudioclient()
+            .with_context(|| format!("activate IAudioClient for {direction:?} endpoint"))?;
+        let format = client
+            .get_mixformat()
+            .with_context(|| format!("get {direction:?} mix format"))?;
+        println!("{direction:?}: {}", describe_format(&format));
+    }
+    Ok(())
+}
+
+fn list_devices(direction: Direction) -> Result<Vec<DeviceSummary>> {
+    active_devices(direction).map(|devices| {
+        devices
+            .into_iter()
+            .map(|selected| selected.summary)
+            .collect()
+    })
+}
+
+fn summarize_device(direction: Direction, device: &Device) -> Result<DeviceSummary> {
+    let format = device
+        .get_device_format()
+        .ok()
+        .map(|format| describe_format(&format));
+    Ok(DeviceSummary {
+        direction: format!("{direction:?}"),
+        id: device.get_id()?,
+        friendly_name: device.get_friendlyname()?,
+        interface_name: device.get_interface_friendlyname().unwrap_or_default(),
+        description: device.get_description().unwrap_or_default(),
+        device_format: format,
+    })
 }
 
 fn describe_format(format: &WaveFormat) -> String {

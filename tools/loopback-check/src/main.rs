@@ -9,13 +9,16 @@ mod types;
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use std::thread;
+use std::time::Duration;
 
-use cli::{Cli, Command};
-use devices::list_command;
+use cli::{Cli, Command, TimingArg};
+use devices::{list_command, probe_command};
 use report::print_report;
 use stream::run_one;
 use types::{
-    AudioConfig, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS, DeviceSelector, validate_config,
+    AudioConfig, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS, DeviceSelector, StreamTiming,
+    validate_config,
 };
 
 fn main() -> Result<()> {
@@ -23,8 +26,17 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::List => {
-            wasapi::initialize_mta().ok()?;
+            wasapi::initialize_sta().ok()?;
             list_command()
+        }
+        Command::Probe(args) => {
+            wasapi::initialize_sta().ok()?;
+            let selector = DeviceSelector {
+                query: args.device.clone(),
+                render_id: args.render_id.clone(),
+                capture_id: args.capture_id.clone(),
+            };
+            probe_command(&selector)
         }
         Command::Test(args) => {
             let selector = DeviceSelector {
@@ -36,6 +48,7 @@ fn main() -> Result<()> {
                 rate: args.rate,
                 bits: args.bits,
                 seconds: args.seconds,
+                timing: timing_arg(args.timing),
                 period_ms: args.period_ms,
                 buffer_periods: args.buffer_periods,
                 pre_roll_ms: args.pre_roll_ms,
@@ -57,12 +70,13 @@ fn main() -> Result<()> {
                 capture_id: args.capture_id.clone(),
             };
             let mut failures = 0;
-            for bits in [16u16, 24] {
-                for rate in [44_100u32, 48_000, 88_200, 96_000] {
+            for rate in [96_000u32, 88_200, 48_000, 44_100] {
+                for bits in [24u16, 16] {
                     let config = AudioConfig {
                         rate,
                         bits,
                         seconds: args.seconds,
+                        timing: timing_arg(args.timing),
                         period_ms: DEFAULT_PERIOD_MS,
                         buffer_periods: DEFAULT_BUFFER_PERIODS,
                         pre_roll_ms: 250,
@@ -88,6 +102,7 @@ fn main() -> Result<()> {
                             println!("{rate:>6} Hz {bits:>2}-bit: ERROR {err:#}");
                         }
                     }
+                    thread::sleep(Duration::from_millis(2_000));
                 }
             }
             if failures == 0 {
@@ -96,5 +111,12 @@ fn main() -> Result<()> {
                 bail!("{failures} matrix cases failed")
             }
         }
+    }
+}
+
+fn timing_arg(arg: TimingArg) -> StreamTiming {
+    match arg {
+        TimingArg::Polling => StreamTiming::Polling,
+        TimingArg::Events => StreamTiming::Events,
     }
 }

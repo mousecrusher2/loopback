@@ -8,7 +8,8 @@ pub const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
 pub const MAX_PACKET_SIZE_16: usize = 96_000 / 1_000 * CHANNEL_COUNT as usize * 2;
 pub const MAX_PACKET_SIZE_24: usize = 96_000 / 1_000 * CHANNEL_COUNT as usize * 3;
 pub const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24;
-pub const PIPE_SIZE: usize = MAX_PACKET_SIZE * 8;
+pub const PIPE_SIZE: usize = MAX_PACKET_SIZE * 16;
+pub const PACKET_LEN_QUEUE_SIZE: usize = 64;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum StreamDirection {

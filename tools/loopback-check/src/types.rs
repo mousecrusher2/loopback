@@ -9,11 +9,18 @@ pub const CHANNEL_MASK_STEREO: u32 = 0x3;
 pub const DEFAULT_PERIOD_MS: f64 = 10.0;
 pub const DEFAULT_BUFFER_PERIODS: u32 = 4;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamTiming {
+    Polling,
+    Events,
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioConfig {
     pub rate: u32,
     pub bits: u16,
     pub seconds: f64,
+    pub timing: StreamTiming,
     pub period_ms: f64,
     pub buffer_periods: u32,
     pub pre_roll_ms: u64,
@@ -53,6 +60,7 @@ pub struct DeviceSummary {
 
 pub struct OpenedStream {
     pub client: wasapi::AudioClient,
+    pub event_handle: Option<wasapi::Handle>,
     pub block_align: usize,
     pub buffer_frames: u32,
     pub period_hns: i64,

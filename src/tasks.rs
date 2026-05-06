@@ -1,15 +1,21 @@
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_sync::pipe::Pipe;
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
 
-use crate::audio::{AudioState, MAX_PACKET_SIZE, PIPE_SIZE, PacketClock, StreamDirection};
+use crate::audio::{
+    AudioState, MAX_PACKET_SIZE, PACKET_LEN_QUEUE_SIZE, PIPE_SIZE, PacketClock, StreamDirection,
+};
+use crate::diag;
 
 pub type AudioPipe = Pipe<CriticalSectionRawMutex, PIPE_SIZE>;
+pub type PacketLenQueue = Channel<CriticalSectionRawMutex, u16, PACKET_LEN_QUEUE_SIZE>;
 
 pub async fn out_task<'d, D: Driver<'d>>(
     mut ep: D::EndpointOut,
     state: &'static AudioState,
     pipe: &'static AudioPipe,
+    packet_lens: &'static PacketLenQueue,
 ) {
     let mut packet = [0u8; MAX_PACKET_SIZE];
 
@@ -22,28 +28,53 @@ pub async fn out_task<'d, D: Driver<'d>>(
                     if len == 0 {
                         continue;
                     }
+                    diag::add_out_packet(len);
                     let bytes_per_audio_frame = state.out_bytes_per_audio_frame();
                     if !state.loopback_format_matches()
                         || bytes_per_audio_frame == 0
                         || len % bytes_per_audio_frame != 0
                     {
                         pipe.clear();
-                    } else if pipe.try_write(&packet[..len]).is_err() {
+                        packet_lens.clear();
+                    } else if enqueue_packet(pipe, packet_lens, &packet[..len]).is_err() {
                         pipe.clear();
-                        let _ = pipe.try_write(&packet[..len]);
+                        packet_lens.clear();
+                        diag::add_out_drop();
+                        let _ = enqueue_packet(pipe, packet_lens, &packet[..len]);
                     }
                 }
-                Err(EndpointError::Disabled) => break,
+                Err(EndpointError::Disabled) => {
+                    pipe.clear();
+                    packet_lens.clear();
+                    break;
+                }
                 Err(EndpointError::BufferOverflow) => {}
             }
         }
     }
 }
 
+fn enqueue_packet(pipe: &AudioPipe, packet_lens: &PacketLenQueue, packet: &[u8]) -> Result<(), ()> {
+    if pipe.free_capacity() < packet.len() {
+        return Err(());
+    }
+
+    let mut offset = 0;
+    while offset < packet.len() {
+        let written = pipe.try_write(&packet[offset..]).map_err(|_| ())?;
+        if written == 0 {
+            return Err(());
+        }
+        offset += written;
+    }
+    packet_lens.try_send(packet.len() as u16).map_err(|_| ())
+}
+
 pub async fn in_task<'d, D: Driver<'d>>(
     mut ep: D::EndpointIn,
     state: &'static AudioState,
     pipe: &'static AudioPipe,
+    packet_lens: &'static PacketLenQueue,
 ) {
     let mut packet = [0u8; MAX_PACKET_SIZE];
     let mut clock = PacketClock::new();
@@ -58,26 +89,49 @@ pub async fn in_task<'d, D: Driver<'d>>(
                 continue;
             }
 
-            let packet_len =
-                clock.next_len(state.rate_hz(StreamDirection::In), bytes_per_audio_frame);
+            let format_matches = state.loopback_format_matches();
+            let mut read_loopback = false;
+            let packet_len = if format_matches {
+                if let Ok(len) = packet_lens.try_receive() {
+                    read_loopback = true;
+                    usize::from(len)
+                } else {
+                    diag::add_in_queue_empty();
+                    clock.next_len(state.rate_hz(StreamDirection::In), bytes_per_audio_frame)
+                }
+            } else {
+                clock.next_len(state.rate_hz(StreamDirection::In), bytes_per_audio_frame)
+            };
             packet[..packet_len].fill(0);
+            diag::add_in_packet(packet_len);
 
-            if state.loopback_format_matches() {
+            if read_loopback {
                 let mut offset = 0;
                 while offset < packet_len {
                     match pipe.try_read(&mut packet[offset..packet_len]) {
                         Ok(0) => break,
-                        Ok(read) => offset += read,
+                        Ok(read) => {
+                            offset += read;
+                            diag::add_in_pipe_bytes(read);
+                        }
                         Err(_) => break,
                     }
                 }
-            } else {
+                if offset < packet_len {
+                    diag::add_in_underrun(packet_len - offset);
+                }
+            } else if !format_matches {
                 pipe.clear();
+                packet_lens.clear();
             }
 
             match ep.write(&packet[..packet_len]).await {
                 Ok(()) => {}
-                Err(EndpointError::Disabled) => break,
+                Err(EndpointError::Disabled) => {
+                    pipe.clear();
+                    packet_lens.clear();
+                    break;
+                }
                 Err(EndpointError::BufferOverflow) => {}
             }
         }

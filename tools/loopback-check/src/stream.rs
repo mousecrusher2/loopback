@@ -16,7 +16,7 @@ use crate::dump::write_dumps;
 use crate::pattern::generate_pattern;
 use crate::types::{
     AudioConfig, CHANNEL_MASK_STEREO, CHANNELS, CheckReport, DeviceSelector, OpenedStream,
-    StreamStats, frames_from_ms, polling_sleep,
+    StreamStats, StreamTiming, frames_from_ms, polling_sleep,
 };
 
 pub fn run_one(
@@ -27,7 +27,29 @@ pub fn run_one(
     let expected = generate_pattern(&config);
     let expected = Arc::new(expected);
     let stop_capture = Arc::new(AtomicBool::new(false));
+    let (render_started_tx, render_started_rx) = mpsc::sync_channel(1);
+    let (payload_start_tx, payload_start_rx) = mpsc::sync_channel(1);
     let (capture_started_tx, capture_started_rx) = mpsc::sync_channel(1);
+
+    let render_selector = selector.clone();
+    let render_config = config.clone();
+    let render_expected = Arc::clone(&expected);
+    let render_thread = thread::Builder::new()
+        .name("loopback-render".to_owned())
+        .spawn(move || {
+            render_loop(
+                render_config,
+                render_selector,
+                render_expected,
+                render_started_tx,
+                payload_start_rx,
+            )
+        })
+        .context("spawn render thread")?;
+
+    render_started_rx
+        .recv_timeout(Duration::from_secs(5))
+        .context("render stream did not start")??;
 
     let capture_selector = selector.clone();
     let capture_config = config.clone();
@@ -44,19 +66,20 @@ pub fn run_one(
         })
         .context("spawn capture thread")?;
 
-    capture_started_rx
+    if let Err(err) = capture_started_rx
         .recv_timeout(Duration::from_secs(5))
-        .context("capture stream did not start")??;
+        .context("capture stream did not start")
+        .and_then(|result| result)
+    {
+        drop(payload_start_tx);
+        let _ = join_thread(render_thread, "render");
+        return Err(err);
+    }
 
     thread::sleep(Duration::from_millis(config.pre_roll_ms));
-
-    let render_selector = selector.clone();
-    let render_config = config.clone();
-    let render_expected = Arc::clone(&expected);
-    let render_thread = thread::Builder::new()
-        .name("loopback-render".to_owned())
-        .spawn(move || render_loop(render_config, render_selector, render_expected))
-        .context("spawn render thread")?;
+    payload_start_tx
+        .send(())
+        .context("signal render payload start")?;
 
     let render_stats = join_thread(render_thread, "render")?;
     thread::sleep(Duration::from_millis(config.tail_ms));
@@ -81,10 +104,21 @@ fn render_loop(
     config: AudioConfig,
     selector: DeviceSelector,
     expected: Arc<Vec<u8>>,
+    started: mpsc::SyncSender<Result<()>>,
+    payload_start: mpsc::Receiver<()>,
 ) -> Result<StreamStats> {
-    wasapi::initialize_mta().ok()?;
-    let opened = open_stream(Direction::Render, &selector, &config)?;
-    let render_client = opened.client.get_audiorenderclient()?;
+    wasapi::initialize_sta().ok()?;
+    let opened = match open_stream(Direction::Render, &selector, &config) {
+        Ok(opened) => opened,
+        Err(err) => {
+            let _ = started.send(Err(anyhow!("{err:#}")));
+            return Err(err);
+        }
+    };
+    let render_client = opened
+        .client
+        .get_audiorenderclient()
+        .context("get WASAPI render client")?;
     let mut stats = StreamStats {
         frames: 0,
         discontinuities: 0,
@@ -98,26 +132,31 @@ fn render_loop(
     let total_frames = config.payload_frames() + tail_frames;
     let mut frame_offset = 0usize;
 
-    while frame_offset < opened.buffer_frames as usize && frame_offset < total_frames {
-        let frames = (opened.buffer_frames as usize)
-            .min(total_frames - frame_offset)
-            .min(opened.buffer_frames as usize - frame_offset);
-        write_render_frames(
+    if opened.buffer_frames > 0 {
+        write_silence_frames(
             &render_client,
-            &expected,
-            config.bytes_per_frame(),
-            frame_offset,
-            frames,
+            opened.buffer_frames as usize,
+            opened.block_align,
         )?;
-        frame_offset += frames;
-        stats.frames += frames;
     }
 
-    opened.client.start_stream()?;
+    opened.client.start_stream().context("start render stream")?;
+    let _ = started.send(Ok(()));
+    loop {
+        match payload_start.try_recv() {
+            Ok(()) => break,
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => bail!("render payload start was canceled"),
+        }
+        let available = wait_render_space(&opened, sleep, 100)?;
+        if available > 0 {
+            write_silence_frames(&render_client, available, opened.block_align)?;
+        }
+    }
+
     while frame_offset < total_frames {
-        let available = opened.client.get_available_space_in_frames()? as usize;
+        let available = wait_render_space(&opened, sleep, 1_000)?;
         if available == 0 {
-            thread::sleep(sleep);
             continue;
         }
         let frames = available.min(total_frames - frame_offset);
@@ -130,11 +169,28 @@ fn render_loop(
         )?;
         frame_offset += frames;
         stats.frames += frames;
-        thread::sleep(sleep);
+        if opened.event_handle.is_none() {
+            thread::sleep(sleep);
+        }
     }
     thread::sleep(Duration::from_millis(config.tail_ms));
-    opened.client.stop_stream()?;
+    opened.client.stop_stream().context("stop render stream")?;
     Ok(stats)
+}
+
+fn wait_render_space(
+    opened: &OpenedStream,
+    sleep: Duration,
+    event_timeout_ms: u32,
+) -> Result<usize> {
+    if let Some(handle) = &opened.event_handle {
+        handle.wait_for_event(event_timeout_ms)?;
+    }
+    let available = opened.client.get_available_space_in_frames()? as usize;
+    if available == 0 && opened.event_handle.is_none() {
+        thread::sleep(sleep);
+    }
+    Ok(available)
 }
 
 fn capture_loop(
@@ -143,7 +199,7 @@ fn capture_loop(
     stop: Arc<AtomicBool>,
     started: mpsc::SyncSender<Result<()>>,
 ) -> Result<(Vec<u8>, StreamStats)> {
-    wasapi::initialize_mta().ok()?;
+    wasapi::initialize_sta().ok()?;
     let opened = match open_stream(Direction::Capture, &selector, &config) {
         Ok(opened) => opened,
         Err(err) => {
@@ -151,7 +207,10 @@ fn capture_loop(
             return Err(err);
         }
     };
-    let capture_client = opened.client.get_audiocaptureclient()?;
+    let capture_client = opened
+        .client
+        .get_audiocaptureclient()
+        .context("get WASAPI capture client")?;
     let mut stats = StreamStats {
         frames: 0,
         discontinuities: 0,
@@ -168,12 +227,21 @@ fn capture_loop(
     let mut scratch = vec![0u8; opened.buffer_frames as usize * opened.block_align];
     let sleep = polling_sleep(opened.period_hns);
 
-    opened.client.start_stream()?;
+    opened.client.start_stream().context("start capture stream")?;
     let _ = started.send(Ok(()));
     while !stop.load(Ordering::SeqCst) {
+        if let Some(handle) = &opened.event_handle {
+            match handle.wait_for_event(1_000) {
+                Ok(()) => {}
+                Err(_) if stop.load(Ordering::SeqCst) => break,
+                Err(err) => return Err(err.into()),
+            }
+        }
         let padding = opened.client.get_current_padding()? as usize;
         if padding == 0 {
-            thread::sleep(sleep);
+            if opened.event_handle.is_none() {
+                thread::sleep(sleep);
+            }
             continue;
         }
         let frames_to_read = padding.min(opened.buffer_frames as usize);
@@ -195,7 +263,7 @@ fn capture_loop(
         }
         stats.frames += frames_read as usize;
     }
-    opened.client.stop_stream()?;
+    opened.client.stop_stream().context("stop capture stream")?;
     Ok((captured, stats))
 }
 
@@ -205,7 +273,9 @@ fn open_stream(
     config: &AudioConfig,
 ) -> Result<OpenedStream> {
     let device = select_device(direction, selector)?;
-    let mut client = device.get_iaudioclient()?;
+    let mut client = device
+        .get_iaudioclient()
+        .with_context(|| format!("activate IAudioClient for {direction:?} endpoint"))?;
     let requested = WaveFormat::new(
         config.bits as usize,
         config.bits as usize,
@@ -239,15 +309,39 @@ fn open_stream(
                 config.rate as i64,
             )
         });
-    let buffer_duration_hns = period_hns * i64::from(config.buffer_periods);
-    let mode = StreamMode::PollingExclusive {
-        buffer_duration_hns,
-        period_hns,
+    let mode = match config.timing {
+        StreamTiming::Polling => {
+            let buffer_duration_hns = period_hns * i64::from(config.buffer_periods);
+            StreamMode::PollingExclusive {
+                buffer_duration_hns,
+                period_hns,
+            }
+        }
+        StreamTiming::Events => StreamMode::EventsExclusive { period_hns },
     };
-    client.initialize_client(&format, &direction, &mode)?;
-    let buffer_frames = client.get_buffer_size()?;
+    client
+        .initialize_client(&format, &direction, &mode)
+        .with_context(|| {
+            format!(
+                "initialize {direction:?} exclusive {:?} stream: {} Hz {}-bit, period_hns={}",
+                config.timing, config.rate, config.bits, period_hns
+            )
+        })?;
+    let event_handle = if config.timing == StreamTiming::Events {
+        Some(
+            client
+                .set_get_eventhandle()
+                .with_context(|| format!("set {direction:?} event handle"))?,
+        )
+    } else {
+        None
+    };
+    let buffer_frames = client
+        .get_buffer_size()
+        .with_context(|| format!("get {direction:?} endpoint buffer size"))?;
     Ok(OpenedStream {
         client,
+        event_handle,
         block_align: format.get_blockalign() as usize,
         buffer_frames,
         period_hns,
@@ -308,6 +402,16 @@ fn write_render_frames(
         let available = (expected.len() - byte_offset).min(byte_len);
         chunk[..available].copy_from_slice(&expected[byte_offset..byte_offset + available]);
     }
+    render_client.write_to_device(frames, &chunk, None)?;
+    Ok(())
+}
+
+fn write_silence_frames(
+    render_client: &wasapi::AudioRenderClient,
+    frames: usize,
+    bytes_per_frame: usize,
+) -> Result<()> {
+    let chunk = vec![0u8; frames * bytes_per_frame];
     render_client.write_to_device(frames, &chunk, None)?;
     Ok(())
 }
