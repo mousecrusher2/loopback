@@ -14,10 +14,14 @@ embedded-test = "0.7.1"
 panic-halt = "1"
 static_cell = "2"
 
+[lib]
+harness = false
+
 [[bin]]
 name = "pico2-uac1-loopback"
 path = "src/main.rs"
 harness = false
+test = false
 
 [profile.dev]
 codegen-units = 1

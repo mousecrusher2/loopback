@@ -81,6 +81,12 @@ impl AudioState {
     }
 }
 
+impl Default for AudioState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct PacketClock {
     rate_hz: u32,
     bytes_per_audio_frame: usize,
@@ -107,6 +113,12 @@ impl PacketClock {
         let audio_frames = self.accumulator / 1_000;
         self.accumulator %= 1_000;
         audio_frames as usize * bytes_per_audio_frame
+    }
+}
+
+impl Default for PacketClock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

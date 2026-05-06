@@ -19,7 +19,7 @@ cargo build --release
 Run the embedded unit tests over the debug probe:
 
 ```powershell
-cargo test --bin pico2-uac1-loopback
+cargo test
 ```
 
 These tests flash a test firmware through `probe-rs`. They do not require the
