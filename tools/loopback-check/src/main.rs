@@ -903,7 +903,7 @@ fn read_i24(sample: &[u8]) -> i32 {
 }
 
 fn frames_from_ms(rate: u32, millis: u64) -> usize {
-    ((u64::from(rate) * millis + 999) / 1000) as usize
+    (u64::from(rate) * millis).div_ceil(1000) as usize
 }
 
 fn polling_sleep(period_hns: i64) -> Duration {
