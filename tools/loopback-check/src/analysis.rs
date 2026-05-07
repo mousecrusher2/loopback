@@ -29,6 +29,7 @@ pub fn analyze(
         rate: config.rate,
         bits: config.bits,
         seconds: config.seconds,
+        capture_mode: config.capture_mode,
         exact,
         sync_found: sync_found_at.is_some(),
         latency_frames,
@@ -158,7 +159,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::pattern::generate_pattern;
-    use crate::types::{StreamStats, StreamTiming};
+    use crate::types::{CaptureMode, StreamStats, StreamTiming};
 
     fn config() -> AudioConfig {
         AudioConfig {
@@ -166,6 +167,7 @@ mod tests {
             bits: 24,
             seconds: 1.0,
             timing: StreamTiming::Polling,
+            capture_mode: CaptureMode::Exclusive,
             period_ms: 10.0,
             buffer_periods: 4,
             pre_roll_ms: 250,

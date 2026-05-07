@@ -15,12 +15,19 @@ pub enum StreamTiming {
     Events,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub enum CaptureMode {
+    Exclusive,
+    Shared,
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioConfig {
     pub rate: u32,
     pub bits: u16,
     pub seconds: f64,
     pub timing: StreamTiming,
+    pub capture_mode: CaptureMode,
     pub period_ms: f64,
     pub buffer_periods: u32,
     pub pre_roll_ms: u64,
@@ -81,6 +88,7 @@ pub struct CheckReport {
     pub rate: u32,
     pub bits: u16,
     pub seconds: f64,
+    pub capture_mode: CaptureMode,
     pub exact: bool,
     pub sync_found: bool,
     pub latency_frames: Option<usize>,

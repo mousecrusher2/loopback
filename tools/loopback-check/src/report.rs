@@ -15,6 +15,7 @@ pub fn print_report(report: &CheckReport) {
         "  sync_found={} latency={:?} frames ({:?} ms)",
         report.sync_found, report.latency_frames, report.latency_ms
     );
+    println!("  capture_mode={:?}", report.capture_mode);
     println!(
         "  compared={} expected={} captured={} mismatched={} missing={}",
         report.compared_bytes,

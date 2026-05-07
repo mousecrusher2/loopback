@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use wasapi::{
-    AudioClientProperties, Direction, SampleType, StreamCategory, StreamMode, StreamOption,
-    WaveFormat, calculate_period_100ns,
+    AudioClientProperties, Direction, SampleType, ShareMode as WasapiShareMode, StreamCategory,
+    StreamMode, StreamOption, WaveFormat, calculate_period_100ns,
 };
 
 use crate::analysis::analyze;
@@ -15,8 +15,8 @@ use crate::devices::select_device;
 use crate::dump::write_dumps;
 use crate::pattern::generate_pattern;
 use crate::types::{
-    AudioConfig, CHANNEL_MASK_STEREO, CHANNELS, CheckReport, DeviceSelector, OpenedStream,
-    StreamStats, StreamTiming, frames_from_ms, polling_sleep,
+    AudioConfig, CHANNEL_MASK_STEREO, CHANNELS, CaptureMode, CheckReport, DeviceSelector,
+    OpenedStream, StreamStats, StreamTiming, frames_from_ms, polling_sleep,
 };
 
 pub fn run_one(
@@ -284,14 +284,40 @@ fn open_stream(
         CHANNELS,
         Some(CHANNEL_MASK_STEREO),
     );
-    let format = client
-        .is_supported_exclusive_with_quirks(&requested)
-        .with_context(|| {
-            format!(
-                "{direction:?} endpoint does not support exact exclusive {} Hz {}-bit stereo",
-                config.rate, config.bits
-            )
-        })?;
+    let capture_mode = if direction == Direction::Capture {
+        config.capture_mode
+    } else {
+        CaptureMode::Exclusive
+    };
+    let format = match capture_mode {
+        CaptureMode::Exclusive => client
+            .is_supported_exclusive_with_quirks(&requested)
+            .with_context(|| {
+                format!(
+                    "{direction:?} endpoint does not support exact exclusive {} Hz {}-bit stereo",
+                    config.rate, config.bits
+                )
+            })?,
+        CaptureMode::Shared => match client
+            .is_supported(&requested, &WasapiShareMode::Shared)
+            .with_context(|| {
+                format!(
+                    "{direction:?} endpoint does not support shared {} Hz {}-bit stereo",
+                    config.rate, config.bits
+                )
+            })? {
+            None => requested,
+            Some(similar) => bail!(
+                "{direction:?} shared mode would use a different format: requested {} Hz {}-bit stereo, nearest is {} Hz {} valid / {} container bits {:?}",
+                config.rate,
+                config.bits,
+                similar.get_samplespersec(),
+                similar.get_validbitspersample(),
+                similar.get_bitspersample(),
+                similar.get_subformat()?
+            ),
+        },
+    };
     verify_exact_format(&format, config, direction)?;
 
     let properties = AudioClientProperties::new()
@@ -301,29 +327,13 @@ fn open_stream(
     let _ = client.set_properties(properties);
 
     let desired_period_hns = (config.period_ms * 10_000.0).round() as i64;
-    let period_hns = client
-        .calculate_aligned_period_near(desired_period_hns, None, &format)
-        .unwrap_or_else(|_| {
-            calculate_period_100ns(
-                ((config.rate as f64 * config.period_ms / 1000.0).round() as i64).max(1),
-                config.rate as i64,
-            )
-        });
-    let mode = match config.timing {
-        StreamTiming::Polling => {
-            let buffer_duration_hns = period_hns * i64::from(config.buffer_periods);
-            StreamMode::PollingExclusive {
-                buffer_duration_hns,
-                period_hns,
-            }
-        }
-        StreamTiming::Events => StreamMode::EventsExclusive { period_hns },
-    };
+    let (mode, period_hns) =
+        stream_mode(&mut client, &format, config, capture_mode, desired_period_hns)?;
     client
         .initialize_client(&format, &direction, &mode)
         .with_context(|| {
             format!(
-                "initialize {direction:?} exclusive {:?} stream: {} Hz {}-bit, period_hns={}",
+                "initialize {direction:?} {capture_mode:?} {:?} stream: {} Hz {}-bit, period_hns={}",
                 config.timing, config.rate, config.bits, period_hns
             )
         })?;
@@ -346,6 +356,56 @@ fn open_stream(
         buffer_frames,
         period_hns,
     })
+}
+
+fn stream_mode(
+    client: &mut wasapi::AudioClient,
+    format: &WaveFormat,
+    config: &AudioConfig,
+    capture_mode: CaptureMode,
+    desired_period_hns: i64,
+) -> Result<(StreamMode, i64)> {
+    match capture_mode {
+        CaptureMode::Exclusive => {
+            let period_hns = client
+                .calculate_aligned_period_near(desired_period_hns, None, format)
+                .unwrap_or_else(|_| {
+                    calculate_period_100ns(
+                        ((config.rate as f64 * config.period_ms / 1000.0).round() as i64).max(1),
+                        config.rate as i64,
+                    )
+                });
+            let mode = match config.timing {
+                StreamTiming::Polling => {
+                    let buffer_duration_hns = period_hns * i64::from(config.buffer_periods);
+                    StreamMode::PollingExclusive {
+                        buffer_duration_hns,
+                        period_hns,
+                    }
+                }
+                StreamTiming::Events => StreamMode::EventsExclusive { period_hns },
+            };
+            Ok((mode, period_hns))
+        }
+        CaptureMode::Shared => {
+            let (default_period_hns, min_period_hns) = client
+                .get_device_period()
+                .context("get shared-mode capture device period")?;
+            let buffer_duration_hns =
+                desired_period_hns.max(min_period_hns) * i64::from(config.buffer_periods);
+            let mode = match config.timing {
+                StreamTiming::Polling => StreamMode::PollingShared {
+                    autoconvert: false,
+                    buffer_duration_hns,
+                },
+                StreamTiming::Events => StreamMode::EventsShared {
+                    autoconvert: false,
+                    buffer_duration_hns,
+                },
+            };
+            Ok((mode, default_period_hns))
+        }
+    }
 }
 
 fn verify_exact_format(

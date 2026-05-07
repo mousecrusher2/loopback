@@ -39,4 +39,5 @@ Host-side bit-perfect loopback checks live in
 ```powershell
 cargo loopback-check -- list
 cargo loopback-check -- test --rate 48000 --bits 16 --seconds 3
+cargo loopback-check -- test --rate 48000 --bits 24 --timing events --capture-mode shared
 ```

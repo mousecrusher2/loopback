@@ -12,13 +12,13 @@ use clap::Parser;
 use std::thread;
 use std::time::Duration;
 
-use cli::{Cli, Command, TimingArg};
+use cli::{CaptureModeArg, Cli, Command, TimingArg};
 use devices::{list_command, probe_command};
 use report::print_report;
 use stream::run_one;
 use types::{
-    AudioConfig, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS, DeviceSelector, StreamTiming,
-    validate_config,
+    AudioConfig, CaptureMode, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS, DeviceSelector,
+    StreamTiming, validate_config,
 };
 
 fn main() -> Result<()> {
@@ -49,6 +49,7 @@ fn main() -> Result<()> {
                 bits: args.bits,
                 seconds: args.seconds,
                 timing: timing_arg(args.timing),
+                capture_mode: capture_mode_arg(args.capture_mode),
                 period_ms: args.period_ms,
                 buffer_periods: args.buffer_periods,
                 pre_roll_ms: args.pre_roll_ms,
@@ -77,6 +78,7 @@ fn main() -> Result<()> {
                         bits,
                         seconds: args.seconds,
                         timing: timing_arg(args.timing),
+                        capture_mode: capture_mode_arg(args.capture_mode),
                         period_ms: DEFAULT_PERIOD_MS,
                         buffer_periods: DEFAULT_BUFFER_PERIODS,
                         pre_roll_ms: 250,
@@ -118,5 +120,12 @@ fn timing_arg(arg: TimingArg) -> StreamTiming {
     match arg {
         TimingArg::Polling => StreamTiming::Polling,
         TimingArg::Events => StreamTiming::Events,
+    }
+}
+
+fn capture_mode_arg(arg: CaptureModeArg) -> CaptureMode {
+    match arg {
+        CaptureModeArg::Exclusive => CaptureMode::Exclusive,
+        CaptureModeArg::Shared => CaptureMode::Shared,
     }
 }

@@ -10,11 +10,17 @@ pub enum TimingArg {
     Events,
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum CaptureModeArg {
+    Exclusive,
+    Shared,
+}
+
 #[derive(Parser)]
 #[command(
     author,
     version,
-    about = "WASAPI exclusive bit-perfect checker for Pico 2 UAC1 loopback"
+    about = "WASAPI bit-perfect checker for Pico 2 UAC1 loopback"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -27,7 +33,7 @@ pub enum Command {
     List,
     /// Activate the selected render and capture endpoints without streaming.
     Probe(ProbeArgs),
-    /// Test one exact PCM format in WASAPI exclusive mode.
+    /// Test one exact PCM format.
     Test(TestArgs),
     /// Test all firmware formats.
     Matrix(MatrixArgs),
@@ -59,9 +65,13 @@ pub struct TestArgs {
     #[arg(long, default_value_t = 3.0)]
     pub seconds: f64,
 
-    /// WASAPI exclusive timing mode.
+    /// WASAPI timing mode.
     #[arg(long, value_enum, default_value_t = TimingArg::Polling)]
     pub timing: TimingArg,
+
+    /// WASAPI capture share mode. Render stays exclusive.
+    #[arg(long, value_enum, default_value_t = CaptureModeArg::Exclusive)]
+    pub capture_mode: CaptureModeArg,
 
     /// Substring matched against friendly name, interface name, description, or endpoint id.
     #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
@@ -75,7 +85,7 @@ pub struct TestArgs {
     #[arg(long)]
     pub capture_id: Option<String>,
 
-    /// Polling period requested from WASAPI exclusive mode.
+    /// Requested stream period. Shared capture uses this to size its buffer.
     #[arg(long, default_value_t = DEFAULT_PERIOD_MS)]
     pub period_ms: f64,
 
@@ -103,6 +113,10 @@ pub struct MatrixArgs {
 
     #[arg(long, value_enum, default_value_t = TimingArg::Polling)]
     pub timing: TimingArg,
+
+    /// WASAPI capture share mode. Render stays exclusive.
+    #[arg(long, value_enum, default_value_t = CaptureModeArg::Exclusive)]
+    pub capture_mode: CaptureModeArg,
 
     #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
     pub device: String,
