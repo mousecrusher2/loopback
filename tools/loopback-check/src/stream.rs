@@ -156,7 +156,10 @@ fn render_loop(
         )?;
     }
 
-    opened.client.start_stream().context("start render stream")?;
+    opened
+        .client
+        .start_stream()
+        .context("start render stream")?;
     let _ = started.send(Ok(()));
     loop {
         match payload_start.try_recv() {
@@ -243,7 +246,10 @@ fn capture_loop(
     let mut scratch = vec![0u8; opened.buffer_frames as usize * opened.block_align];
     let sleep = polling_sleep(opened.period_hns);
 
-    opened.client.start_stream().context("start capture stream")?;
+    opened
+        .client
+        .start_stream()
+        .context("start capture stream")?;
     let _ = started.send(Ok(()));
     while !stop.load(Ordering::SeqCst) {
         if let Some(handle) = &opened.event_handle {
@@ -343,8 +349,13 @@ fn open_stream(
     let _ = client.set_properties(properties);
 
     let desired_period_hns = (config.period_ms * 10_000.0).round() as i64;
-    let (mode, period_hns) =
-        stream_mode(&mut client, &format, config, capture_mode, desired_period_hns)?;
+    let (mode, period_hns) = stream_mode(
+        &mut client,
+        &format,
+        config,
+        capture_mode,
+        desired_period_hns,
+    )?;
     client
         .initialize_client(&format, &direction, &mode)
         .with_context(|| {

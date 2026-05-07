@@ -71,12 +71,7 @@ pub fn select_device(direction: Direction, selector: &DeviceSelector) -> Result<
         many => {
             let names = many
                 .iter()
-                .map(|device| {
-                    format!(
-                        "  {} ({})",
-                        device.summary.friendly_name, device.summary.id
-                    )
-                })
+                .map(|device| format!("  {} ({})", device.summary.friendly_name, device.summary.id))
                 .collect::<Vec<_>>()
                 .join("\n");
             bail!(

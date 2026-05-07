@@ -1,5 +1,5 @@
-use std::mem::ManuallyDrop;
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use std::slice;
 use std::thread;
 use std::time::Duration;
@@ -7,8 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use wasapi::{Direction, WaveFormat};
 use windows::Win32::Media::Audio::{
-    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEngine_DeviceFormat,
-    WAVEFORMATEX,
+    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEngine_DeviceFormat, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0, PropVariantClear,
@@ -232,8 +231,12 @@ struct IPolicyConfigVtbl {
     GetDeviceFormat:
         unsafe extern "system" fn(*mut c_void, PCWSTR, i32, *mut *mut WAVEFORMATEX) -> HRESULT,
     ResetDeviceFormat: unsafe extern "system" fn(*mut c_void, PCWSTR) -> HRESULT,
-    SetDeviceFormat:
-        unsafe extern "system" fn(*mut c_void, PCWSTR, *mut WAVEFORMATEX, *mut WAVEFORMATEX) -> HRESULT,
+    SetDeviceFormat: unsafe extern "system" fn(
+        *mut c_void,
+        PCWSTR,
+        *mut WAVEFORMATEX,
+        *mut WAVEFORMATEX,
+    ) -> HRESULT,
 }
 
 fn parse_blob_property(prop: &PROPVARIANT) -> Result<Vec<u8>> {
