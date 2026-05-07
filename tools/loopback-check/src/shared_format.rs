@@ -137,9 +137,15 @@ fn device_format_matches_config(format: &WaveFormat, config: &AudioConfig) -> bo
 
 fn get_device_format_blob(endpoint_id: &str) -> Result<Vec<u8>> {
     let device = get_imm_device(endpoint_id)?;
+    // SAFETY: `device` is a live IMMDevice obtained from the COM enumerator,
+    // and STGM_READ is a valid property-store access mode.
     let store = unsafe { device.OpenPropertyStore(STGM_READ)? };
+    // SAFETY: `store` is a live IPropertyStore and the property key is a
+    // Windows-defined constant for the endpoint format blob.
     let mut prop = unsafe { store.GetValue(&PKEY_AudioEngine_DeviceFormat)? };
     let result = parse_blob_property(&prop);
+    // SAFETY: `prop` was initialized by `GetValue`. `parse_blob_property` has
+    // already copied any blob bytes before the PROPVARIANT is cleared.
     unsafe { PropVariantClear(&mut prop) }?;
     result
 }
@@ -159,8 +165,13 @@ fn set_device_format_blob(endpoint_id: &str, blob: &[u8]) -> Result<()> {
 
 fn set_device_format_blob_property_store(endpoint_id: &str, blob: &[u8]) -> Result<()> {
     let device = get_imm_device(endpoint_id)?;
+    // SAFETY: `device` is a live IMMDevice obtained from the COM enumerator,
+    // and STGM_READWRITE requests a valid writable property store.
     let store = unsafe { device.OpenPropertyStore(STGM_READWRITE)? };
     let prop = make_blob_propvariant(blob);
+    // SAFETY: `store` is a live IPropertyStore. `prop` points at `blob`, which
+    // remains valid for both calls, and IPropertyStore copies the PROPVARIANT
+    // value during `SetValue`.
     unsafe {
         store.SetValue(&PKEY_AudioEngine_DeviceFormat, &prop)?;
         store.Commit()?;
@@ -171,8 +182,14 @@ fn set_device_format_blob_property_store(endpoint_id: &str, blob: &[u8]) -> Resu
 fn set_device_format_blob_policy_config(endpoint_id: &str, blob: &[u8]) -> Result<()> {
     let mut format = WaveFormat::parse_from_blob_bytes(blob)?.wave_fmt;
     let endpoint_id = HSTRING::from(endpoint_id);
+    // SAFETY: COM is initialized by `prepare_capture_shared_format`, and the
+    // CLSID/IID pair is the known Windows PolicyConfig client used by the audio
+    // settings UI.
     let policy: IPolicyConfig =
         unsafe { CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL)? };
+    // SAFETY: `endpoint_id` and `format` live for the duration of the call.
+    // Both format pointers reference the same mutable WAVEFORMATEX, which is
+    // accepted by IPolicyConfig when setting endpoint and mix format together.
     unsafe {
         policy.set_device_format(
             PCWSTR::from_raw(endpoint_id.as_ptr()),
@@ -184,9 +201,13 @@ fn set_device_format_blob_policy_config(endpoint_id: &str, blob: &[u8]) -> Resul
 }
 
 fn get_imm_device(endpoint_id: &str) -> Result<IMMDevice> {
+    // SAFETY: COM is initialized by `prepare_capture_shared_format`, and
+    // MMDeviceEnumerator is the system-provided COM class for audio endpoints.
     let enumerator: IMMDeviceEnumerator =
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
     let endpoint_id = HSTRING::from(endpoint_id);
+    // SAFETY: `endpoint_id` is an HSTRING that stays alive for the call, and
+    // Windows HSTRING buffers are NUL-terminated for PCWSTR interop.
     let device = unsafe { enumerator.GetDevice(PCWSTR::from_raw(endpoint_id.as_ptr()))? };
     Ok(device)
 }
@@ -206,6 +227,9 @@ impl IPolicyConfig {
         endpoint_format: *mut WAVEFORMATEX,
         mix_format: *mut WAVEFORMATEX,
     ) -> windows::core::Result<()> {
+        // SAFETY: `self` is an IPolicyConfig COM interface with the vtable
+        // declared below. The caller supplies pointers that stay valid for the
+        // duration of the COM call.
         unsafe {
             (Interface::vtable(self).SetDeviceFormat)(
                 Interface::as_raw(self),
@@ -218,6 +242,9 @@ impl IPolicyConfig {
     }
 }
 
+// SAFETY: `IPolicyConfig` is a transparent wrapper around `IUnknown`, and the
+// IID/vtable layout below matches the Windows PolicyConfig interface used by
+// the audio control panel for the methods this tool calls.
 unsafe impl Interface for IPolicyConfig {
     type Vtable = IPolicyConfigVtbl;
     const IID: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
@@ -243,7 +270,18 @@ fn parse_blob_property(prop: &PROPVARIANT) -> Result<Vec<u8>> {
     if prop.vt() != VT_BLOB {
         bail!("PKEY_AudioEngine_DeviceFormat was not VT_BLOB");
     }
+    // SAFETY: The active PROPVARIANT tag was checked as VT_BLOB, so reading the
+    // `blob` union field is valid.
     let blob = unsafe { prop.Anonymous.Anonymous.Anonymous.blob };
+    if blob.cbSize == 0 {
+        return Ok(Vec::new());
+    }
+    if blob.pBlobData.is_null() {
+        bail!("PKEY_AudioEngine_DeviceFormat blob had a null data pointer");
+    }
+    // SAFETY: `pBlobData` is non-null and owned by the live PROPVARIANT for
+    // `cbSize` bytes. The caller clears the PROPVARIANT only after this slice
+    // has been copied into a Vec.
     let blob_slice = unsafe { slice::from_raw_parts(blob.pBlobData, blob.cbSize as usize) };
     Ok(blob_slice.to_vec())
 }

@@ -2,6 +2,9 @@
 mod enabled {
     use core::sync::atomic::{AtomicU32, Ordering};
 
+    // SAFETY: The exported diagnostics symbols below all use unique
+    // project-prefixed names and are defined exactly once in the firmware.
+    // They are atomics, so debugger reads do not require non-atomic access.
     #[unsafe(no_mangle)]
     pub static UAC_DIAG_OUT_PACKETS: AtomicU32 = AtomicU32::new(0);
     #[unsafe(no_mangle)]
