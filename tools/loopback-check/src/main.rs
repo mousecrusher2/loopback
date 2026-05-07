@@ -4,6 +4,7 @@ mod devices;
 mod dump;
 mod pattern;
 mod report;
+mod shared_format;
 mod stream;
 mod types;
 
@@ -12,13 +13,14 @@ use clap::Parser;
 use std::thread;
 use std::time::Duration;
 
-use cli::{CaptureModeArg, Cli, Command, TimingArg};
+use cli::{CaptureModeArg, Cli, Command, SharedFormatArg, TimingArg};
 use devices::{list_command, probe_command};
 use report::print_report;
+use shared_format::prepare_capture_shared_format;
 use stream::run_one;
 use types::{
     AudioConfig, CaptureMode, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS, DeviceSelector,
-    StreamTiming, validate_config,
+    SharedFormatMode, StreamTiming, validate_config,
 };
 
 fn main() -> Result<()> {
@@ -56,7 +58,12 @@ fn main() -> Result<()> {
                 tail_ms: args.tail_ms,
             };
             validate_config(&config)?;
-            let report = run_one(config, selector, args.dump_dir.as_deref())?;
+            let report = run_with_shared_format(
+                config,
+                selector,
+                args.dump_dir.as_deref(),
+                shared_format_arg(args.shared_format),
+            )?;
             print_report(&report);
             if report.exact {
                 Ok(())
@@ -88,7 +95,12 @@ fn main() -> Result<()> {
                         .dump_dir
                         .as_ref()
                         .map(|base| base.join(format!("{rate}hz-{bits}bit")));
-                    match run_one(config, selector.clone(), dump_dir.as_deref()) {
+                    match run_with_shared_format(
+                        config,
+                        selector.clone(),
+                        dump_dir.as_deref(),
+                        shared_format_arg(args.shared_format),
+                    ) {
                         Ok(report) if report.exact => {
                             println!("{rate:>6} Hz {bits:>2}-bit: ok");
                         }
@@ -116,6 +128,30 @@ fn main() -> Result<()> {
     }
 }
 
+fn run_with_shared_format(
+    config: AudioConfig,
+    selector: DeviceSelector,
+    dump_dir: Option<&std::path::Path>,
+    shared_format: SharedFormatMode,
+) -> Result<types::CheckReport> {
+    let guard = prepare_capture_shared_format(&selector, &config, shared_format)?;
+    let result = run_one(config, selector, dump_dir);
+    if let Some(guard) = guard {
+        let restore_result = guard.restore();
+        match (result, restore_result) {
+            (Ok(report), Ok(())) => return Ok(report),
+            (Ok(_), Err(err)) => return Err(err),
+            (Err(err), Ok(())) => return Err(err),
+            (Err(err), Err(restore_err)) => {
+                return Err(err.context(format!(
+                    "also failed to restore capture shared-mode format: {restore_err:#}"
+                )));
+            }
+        }
+    }
+    result
+}
+
 fn timing_arg(arg: TimingArg) -> StreamTiming {
     match arg {
         TimingArg::Polling => StreamTiming::Polling,
@@ -127,5 +163,13 @@ fn capture_mode_arg(arg: CaptureModeArg) -> CaptureMode {
     match arg {
         CaptureModeArg::Exclusive => CaptureMode::Exclusive,
         CaptureModeArg::Shared => CaptureMode::Shared,
+    }
+}
+
+fn shared_format_arg(arg: SharedFormatArg) -> SharedFormatMode {
+    match arg {
+        SharedFormatArg::Leave => SharedFormatMode::Leave,
+        SharedFormatArg::SetRestore => SharedFormatMode::SetRestore,
+        SharedFormatArg::SetKeep => SharedFormatMode::SetKeep,
     }
 }

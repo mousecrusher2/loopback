@@ -16,6 +16,16 @@ pub enum CaptureModeArg {
     Shared,
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum SharedFormatArg {
+    /// Leave the Windows shared-mode device format unchanged.
+    Leave,
+    /// Set the capture endpoint format before the test and restore it afterwards.
+    SetRestore,
+    /// Set the capture endpoint format and leave it there after the test.
+    SetKeep,
+}
+
 #[derive(Parser)]
 #[command(
     author,
@@ -73,6 +83,10 @@ pub struct TestArgs {
     #[arg(long, value_enum, default_value_t = CaptureModeArg::Exclusive)]
     pub capture_mode: CaptureModeArg,
 
+    /// How to handle the Windows shared-mode capture device format.
+    #[arg(long, value_enum, default_value_t = SharedFormatArg::SetRestore)]
+    pub shared_format: SharedFormatArg,
+
     /// Substring matched against friendly name, interface name, description, or endpoint id.
     #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
     pub device: String,
@@ -117,6 +131,10 @@ pub struct MatrixArgs {
     /// WASAPI capture share mode. Render stays exclusive.
     #[arg(long, value_enum, default_value_t = CaptureModeArg::Exclusive)]
     pub capture_mode: CaptureModeArg,
+
+    /// How to handle the Windows shared-mode capture device format.
+    #[arg(long, value_enum, default_value_t = SharedFormatArg::SetRestore)]
+    pub shared_format: SharedFormatArg,
 
     #[arg(long, default_value = DEFAULT_DEVICE_QUERY)]
     pub device: String,

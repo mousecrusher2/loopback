@@ -21,6 +21,13 @@ pub enum CaptureMode {
     Shared,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SharedFormatMode {
+    Leave,
+    SetRestore,
+    SetKeep,
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioConfig {
     pub rate: u32,

@@ -41,3 +41,6 @@ cargo loopback-check -- list
 cargo loopback-check -- test --rate 48000 --bits 16 --seconds 3
 cargo loopback-check -- test --rate 48000 --bits 24 --timing events --capture-mode shared
 ```
+
+Shared capture tests set the selected Windows capture shared-mode format to the
+requested rate/bit depth by default, then restore the previous setting.
