@@ -35,7 +35,7 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::new(0xcafe, 0x4001);
     config.manufacturer = Some("Embassy");
     config.product = Some("Pico 2 UAC1 Loopback");
-    config.serial_number = Some("pico2-loopback-0004");
+    config.serial_number = Some("pico2-loopback-0005");
     config.max_packet_size_0 = 64;
     config.max_power = 100;
 

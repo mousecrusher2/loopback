@@ -25,17 +25,17 @@ The 16-bit and 24-bit alternate settings advertise four discrete sample rates:
 followed by 24-bit little-endian `tSamFreq` entries, as defined by USB Audio
 Data Formats 1.0 section 2.2.5.
 
-The allocated RP2350 endpoint buffer is sized for the largest stream,
-24-bit stereo at 96 kHz:
+The allocated RP2350 endpoint buffer is sized for the largest advertised packet,
+24-bit stereo at 96 kHz plus one audio frame of headroom:
 
 ```text
-96 samples/ms * 2 channels * 3 bytes = 576 bytes
+97 samples/ms * 2 channels * 3 bytes = 582 bytes
 ```
 
 The descriptor `wMaxPacketSize` is still written per alternate setting:
 
-- 16-bit stereo at 96 kHz: 384 bytes
-- 24-bit stereo at 96 kHz: 576 bytes
+- 16-bit stereo at 96 kHz plus one audio frame of headroom: 388 bytes
+- 24-bit stereo at 96 kHz plus one audio frame of headroom: 582 bytes
 - 32-bit stereo at 48 kHz plus one adaptive OUT frame of headroom: 392 bytes
 
 ## Synchronization and feedback
