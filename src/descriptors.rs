@@ -102,7 +102,7 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 &mut alt16,
                 &out_info16,
                 MAX_PACKET_SIZE_16 as u16,
-                SynchronizationType::Synchronous,
+                SynchronizationType::Adaptive,
             );
             write_class_specific_endpoint(&mut alt16);
         }
@@ -125,7 +125,7 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 &mut alt24,
                 &out_info24,
                 MAX_PACKET_SIZE_24 as u16,
-                SynchronizationType::Synchronous,
+                SynchronizationType::Adaptive,
             );
             write_class_specific_endpoint(&mut alt24);
         }
@@ -165,7 +165,7 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             &mut alt16,
             &in_info16,
             MAX_PACKET_SIZE_16 as u16,
-            SynchronizationType::Synchronous,
+            SynchronizationType::Asynchronous,
         );
         write_class_specific_endpoint(&mut alt16);
     }
@@ -188,7 +188,7 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             &mut alt24,
             &in_info24,
             MAX_PACKET_SIZE_24 as u16,
-            SynchronizationType::Synchronous,
+            SynchronizationType::Asynchronous,
         );
         write_class_specific_endpoint(&mut alt24);
     }
