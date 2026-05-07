@@ -31,6 +31,7 @@ fn sample_value(frame: u32, channel: u32, bits: u16) -> i32 {
             let value = (x & 0x00ff_ffff) as i32 - 0x0080_0000;
             value.saturating_mul(3) / 4
         }
+        32 => x as i32,
         _ => 0,
     }
 }
@@ -44,6 +45,7 @@ fn push_sample(bytes: &mut Vec<u8>, sample: i32, bits: u16) {
             bytes.push((sample >> 8) as u8);
             bytes.push((sample >> 16) as u8);
         }
+        32 => bytes.extend_from_slice(&sample.to_le_bytes()),
         _ => {}
     }
 }

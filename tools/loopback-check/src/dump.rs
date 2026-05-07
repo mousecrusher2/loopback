@@ -43,6 +43,13 @@ fn write_wav(path: &Path, config: &AudioConfig, bytes: &[u8]) -> Result<()> {
                 writer.write_sample(read_i24(sample))?;
             }
         }
+        32 => {
+            for sample in bytes.chunks_exact(4) {
+                writer.write_sample(i32::from_le_bytes([
+                    sample[0], sample[1], sample[2], sample[3],
+                ]))?;
+            }
+        }
         _ => bail!("unsupported WAV bit depth {}", config.bits),
     }
     writer.finalize()?;

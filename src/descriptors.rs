@@ -3,7 +3,10 @@ use embassy_usb::driver::{Driver, Endpoint, EndpointInfo, EndpointType};
 use embassy_usb::types::InterfaceNumber;
 use embassy_usb::{Builder, InterfaceAltBuilder};
 
-use crate::audio::{CHANNEL_COUNT, MAX_PACKET_SIZE_16, MAX_PACKET_SIZE_24};
+use crate::audio::{
+    CHANNEL_COUNT, MAX_PACKET_SIZE_16, MAX_PACKET_SIZE_24, MAX_PACKET_SIZE_32,
+    SUPPORTED_SAMPLE_RATES, SUPPORTED_SAMPLE_RATES_32,
+};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIO_CONTROL: u8 = 0x01;
@@ -35,12 +38,14 @@ const IN_USB_TERMINAL_ID: u8 = 4;
 pub struct AudioEndpoints<'d, D: Driver<'d>> {
     pub out_ep16: D::EndpointOut,
     pub out_ep24: D::EndpointOut,
+    pub out_ep32: D::EndpointOut,
     pub in_ep16: D::EndpointIn,
     pub in_ep24: D::EndpointIn,
+    pub in_ep32: D::EndpointIn,
     pub out_streaming_if: InterfaceNumber,
     pub in_streaming_if: InterfaceNumber,
-    pub out_ep_addrs: [u8; 2],
-    pub in_ep_addrs: [u8; 2],
+    pub out_ep_addrs: [u8; 3],
+    pub in_ep_addrs: [u8; 3],
 }
 
 pub fn build_audio_function<'d, D: Driver<'d>>(
@@ -68,8 +73,10 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
 
     let out_ep16;
     let out_ep24;
+    let out_ep32;
     let out_info16;
     let out_info24;
+    let out_info32;
     let out_streaming_if;
     {
         let mut out_if = function.interface();
@@ -90,7 +97,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 USB_AUDIO_PROTOCOL_UNDEFINED,
                 None,
             );
-            write_streaming_descriptors(&mut alt16, OUT_USB_TERMINAL_ID, 2, 16);
+            write_streaming_descriptors(
+                &mut alt16,
+                OUT_USB_TERMINAL_ID,
+                2,
+                16,
+                &SUPPORTED_SAMPLE_RATES,
+            );
             out_ep16 = alt16.alloc_endpoint_out(
                 EndpointType::Isochronous,
                 None,
@@ -113,7 +126,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 USB_AUDIO_PROTOCOL_UNDEFINED,
                 None,
             );
-            write_streaming_descriptors(&mut alt24, OUT_USB_TERMINAL_ID, 3, 24);
+            write_streaming_descriptors(
+                &mut alt24,
+                OUT_USB_TERMINAL_ID,
+                3,
+                24,
+                &SUPPORTED_SAMPLE_RATES,
+            );
             out_ep24 = alt24.alloc_endpoint_out(
                 EndpointType::Isochronous,
                 None,
@@ -128,6 +147,35 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 SynchronizationType::Adaptive,
             );
             write_class_specific_endpoint(&mut alt24);
+        }
+        {
+            let mut alt32 = out_if.alt_setting(
+                USB_CLASS_AUDIO,
+                USB_SUBCLASS_AUDIO_STREAMING,
+                USB_AUDIO_PROTOCOL_UNDEFINED,
+                None,
+            );
+            write_streaming_descriptors(
+                &mut alt32,
+                OUT_USB_TERMINAL_ID,
+                4,
+                32,
+                &SUPPORTED_SAMPLE_RATES_32,
+            );
+            out_ep32 = alt32.alloc_endpoint_out(
+                EndpointType::Isochronous,
+                None,
+                MAX_PACKET_SIZE_32 as u16,
+                1,
+            );
+            out_info32 = *out_ep32.info();
+            write_audio_data_endpoint(
+                &mut alt32,
+                &out_info32,
+                MAX_PACKET_SIZE_32 as u16,
+                SynchronizationType::Adaptive,
+            );
+            write_class_specific_endpoint(&mut alt32);
         }
     }
 
@@ -144,8 +192,10 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
 
     let in_ep16;
     let in_ep24;
+    let in_ep32;
     let in_info16;
     let in_info24;
+    let in_info32;
     {
         let mut alt16 = in_if.alt_setting(
             USB_CLASS_AUDIO,
@@ -153,7 +203,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             USB_AUDIO_PROTOCOL_UNDEFINED,
             None,
         );
-        write_streaming_descriptors(&mut alt16, IN_USB_TERMINAL_ID, 2, 16);
+        write_streaming_descriptors(
+            &mut alt16,
+            IN_USB_TERMINAL_ID,
+            2,
+            16,
+            &SUPPORTED_SAMPLE_RATES,
+        );
         in_ep16 = alt16.alloc_endpoint_in(
             EndpointType::Isochronous,
             None,
@@ -176,7 +232,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             USB_AUDIO_PROTOCOL_UNDEFINED,
             None,
         );
-        write_streaming_descriptors(&mut alt24, IN_USB_TERMINAL_ID, 3, 24);
+        write_streaming_descriptors(
+            &mut alt24,
+            IN_USB_TERMINAL_ID,
+            3,
+            24,
+            &SUPPORTED_SAMPLE_RATES,
+        );
         in_ep24 = alt24.alloc_endpoint_in(
             EndpointType::Isochronous,
             None,
@@ -192,16 +254,55 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
         );
         write_class_specific_endpoint(&mut alt24);
     }
+    {
+        let mut alt32 = in_if.alt_setting(
+            USB_CLASS_AUDIO,
+            USB_SUBCLASS_AUDIO_STREAMING,
+            USB_AUDIO_PROTOCOL_UNDEFINED,
+            None,
+        );
+        write_streaming_descriptors(
+            &mut alt32,
+            IN_USB_TERMINAL_ID,
+            4,
+            32,
+            &SUPPORTED_SAMPLE_RATES_32,
+        );
+        in_ep32 = alt32.alloc_endpoint_in(
+            EndpointType::Isochronous,
+            None,
+            MAX_PACKET_SIZE_32 as u16,
+            1,
+        );
+        in_info32 = *in_ep32.info();
+        write_audio_data_endpoint(
+            &mut alt32,
+            &in_info32,
+            MAX_PACKET_SIZE_32 as u16,
+            SynchronizationType::Asynchronous,
+        );
+        write_class_specific_endpoint(&mut alt32);
+    }
 
     AudioEndpoints {
         out_ep16,
         out_ep24,
+        out_ep32,
         in_ep16,
         in_ep24,
+        in_ep32,
         out_streaming_if,
         in_streaming_if,
-        out_ep_addrs: [u8::from(out_info16.addr), u8::from(out_info24.addr)],
-        in_ep_addrs: [u8::from(in_info16.addr), u8::from(in_info24.addr)],
+        out_ep_addrs: [
+            u8::from(out_info16.addr),
+            u8::from(out_info24.addr),
+            u8::from(out_info32.addr),
+        ],
+        in_ep_addrs: [
+            u8::from(in_info16.addr),
+            u8::from(in_info24.addr),
+            u8::from(in_info32.addr),
+        ],
     }
 }
 
@@ -303,6 +404,7 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
     terminal_link: u8,
     subframe_size: u8,
     bit_resolution: u8,
+    sample_rates: &[u32],
 ) {
     alt.descriptor(
         CS_INTERFACE,
@@ -315,29 +417,21 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
         ],
     );
 
-    alt.descriptor(
-        CS_INTERFACE,
-        &[
-            FORMAT_TYPE,
-            FORMAT_TYPE_I,
-            CHANNEL_COUNT,
-            subframe_size,
-            bit_resolution,
-            0x04,
-            0x44,
-            0xac,
-            0x00,
-            0x80,
-            0xbb,
-            0x00,
-            0x88,
-            0x58,
-            0x01,
-            0x00,
-            0x77,
-            0x01,
-        ],
-    );
+    let mut format_type = [0u8; 18];
+    format_type[0] = FORMAT_TYPE;
+    format_type[1] = FORMAT_TYPE_I;
+    format_type[2] = CHANNEL_COUNT;
+    format_type[3] = subframe_size;
+    format_type[4] = bit_resolution;
+    format_type[5] = sample_rates.len() as u8;
+    let mut offset = 6;
+    for rate in sample_rates {
+        format_type[offset] = *rate as u8;
+        format_type[offset + 1] = (*rate >> 8) as u8;
+        format_type[offset + 2] = (*rate >> 16) as u8;
+        offset += 3;
+    }
+    alt.descriptor(CS_INTERFACE, &format_type[..offset]);
 }
 
 fn write_class_specific_endpoint<'d, D: Driver<'d>>(alt: &mut InterfaceAltBuilder<'_, 'd, D>) {

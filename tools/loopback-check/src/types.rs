@@ -121,8 +121,11 @@ pub fn validate_config(config: &AudioConfig) -> Result<()> {
     if !matches!(config.rate, 44_100 | 48_000 | 88_200 | 96_000) {
         bail!("rate must be one of 44100, 48000, 88200, 96000");
     }
-    if !matches!(config.bits, 16 | 24) {
-        bail!("bits must be 16 or 24");
+    if !matches!(config.bits, 16 | 24 | 32) {
+        bail!("bits must be 16, 24, or 32");
+    }
+    if config.bits == 32 && !matches!(config.rate, 44_100 | 48_000) {
+        bail!("32-bit checks are limited to 44100 or 48000");
     }
     if !(0.1..=30.0).contains(&config.seconds) {
         bail!("seconds must be between 0.1 and 30.0");

@@ -3,10 +3,13 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 pub const CHANNEL_COUNT: u8 = 2;
 pub const SAMPLE_WIDTH_16_ALT: u8 = 1;
 pub const SAMPLE_WIDTH_24_ALT: u8 = 2;
+pub const SAMPLE_WIDTH_32_ALT: u8 = 3;
 pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 pub const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
+pub const SUPPORTED_SAMPLE_RATES_32: [u32; 2] = [44_100, 48_000];
 pub const MAX_PACKET_SIZE_16: usize = 96_000 / 1_000 * CHANNEL_COUNT as usize * 2;
 pub const MAX_PACKET_SIZE_24: usize = 96_000 / 1_000 * CHANNEL_COUNT as usize * 3;
+pub const MAX_PACKET_SIZE_32: usize = 49 * CHANNEL_COUNT as usize * 4;
 pub const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24;
 pub const PIPE_SIZE: usize = MAX_PACKET_SIZE * 16;
 pub const PACKET_LEN_QUEUE_SIZE: usize = 64;
@@ -127,15 +130,28 @@ pub fn bytes_per_audio_frame(alt: u8) -> usize {
     match alt {
         SAMPLE_WIDTH_16_ALT => CHANNEL_COUNT as usize * 2,
         SAMPLE_WIDTH_24_ALT => CHANNEL_COUNT as usize * 3,
+        SAMPLE_WIDTH_32_ALT => CHANNEL_COUNT as usize * 4,
         _ => 0,
     }
 }
 
 pub fn closest_supported_rate(rate: u32) -> u32 {
-    let mut closest = SUPPORTED_SAMPLE_RATES[0];
+    closest_rate_in(rate, &SUPPORTED_SAMPLE_RATES)
+}
+
+pub fn closest_supported_rate_for_alt(alt: u8, rate: u32) -> u32 {
+    if alt == SAMPLE_WIDTH_32_ALT {
+        closest_rate_in(rate, &SUPPORTED_SAMPLE_RATES_32)
+    } else {
+        closest_supported_rate(rate)
+    }
+}
+
+fn closest_rate_in(rate: u32, rates: &[u32]) -> u32 {
+    let mut closest = rates[0];
     let mut closest_diff = closest.abs_diff(rate);
 
-    for candidate in SUPPORTED_SAMPLE_RATES.iter().copied().skip(1) {
+    for candidate in rates.iter().copied().skip(1) {
         let diff = candidate.abs_diff(rate);
         if diff < closest_diff {
             closest = candidate;
@@ -156,7 +172,8 @@ mod tests {
         assert_eq!(bytes_per_audio_frame(0), 0);
         assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_16_ALT), 4);
         assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_24_ALT), 6);
-        assert_eq!(bytes_per_audio_frame(3), 0);
+        assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_32_ALT), 8);
+        assert_eq!(bytes_per_audio_frame(4), 0);
     }
 
     #[test]
@@ -169,6 +186,34 @@ mod tests {
         assert_eq!(closest_supported_rate(50_000), 48_000);
         assert_eq!(closest_supported_rate(90_000), 88_200);
         assert_eq!(closest_supported_rate(95_000), 96_000);
+    }
+
+    #[test]
+    fn unsupported_32bit_sample_rates_round_to_44k1_or_48k() {
+        assert_eq!(
+            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 44_100),
+            44_100
+        );
+        assert_eq!(
+            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 48_000),
+            48_000
+        );
+        assert_eq!(
+            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 45_000),
+            44_100
+        );
+        assert_eq!(
+            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 50_000),
+            48_000
+        );
+        assert_eq!(
+            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 88_200),
+            48_000
+        );
+        assert_eq!(
+            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 96_000),
+            48_000
+        );
     }
 
     #[test]
@@ -208,6 +253,24 @@ mod tests {
     }
 
     #[test]
+    fn packet_clock_emits_32bit_fractional_44k1_cadence() {
+        let mut clock = PacketClock::new();
+        let mut total = 0;
+
+        for index in 0..10 {
+            let len = clock.next_len(44_100, bytes_per_audio_frame(SAMPLE_WIDTH_32_ALT));
+            total += len;
+            if index == 9 {
+                assert_eq!(len, 45 * 8);
+            } else {
+                assert_eq!(len, 44 * 8);
+            }
+        }
+
+        assert_eq!(total, 441 * 8);
+    }
+
+    #[test]
     fn packet_clock_resets_fractional_state_when_format_changes() {
         let mut clock = PacketClock::new();
 
@@ -240,5 +303,11 @@ mod tests {
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_16_ALT);
         state.set_rate_hz(StreamDirection::In, 44_100);
         assert!(!state.loopback_format_matches());
+
+        state.set_alt(StreamDirection::Out, SAMPLE_WIDTH_32_ALT);
+        state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
+        state.set_rate_hz(StreamDirection::Out, 48_000);
+        state.set_rate_hz(StreamDirection::In, 48_000);
+        assert!(state.loopback_format_matches());
     }
 }

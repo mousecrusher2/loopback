@@ -17,12 +17,13 @@ returns digital silence instead of reinterpreting the byte stream.
 
 Each AudioStreaming interface has alternate setting 0 as the zero-bandwidth
 setting. Alternate setting 1 is stereo 16-bit PCM, and alternate setting 2 is
-stereo 24-bit PCM.
+stereo 24-bit PCM. Alternate setting 3 is stereo 32-bit PCM.
 
-Both operational alternate settings advertise four discrete sample rates:
-44.1 kHz, 48 kHz, 88.2 kHz, and 96 kHz. The Type I Format Type descriptor uses
-`bSamFreqType = 4` followed by four 24-bit little-endian `tSamFreq` entries, as
-defined by USB Audio Data Formats 1.0 section 2.2.5.
+The 16-bit and 24-bit alternate settings advertise four discrete sample rates:
+44.1 kHz, 48 kHz, 88.2 kHz, and 96 kHz. The 32-bit alternate setting advertises
+44.1 kHz and 48 kHz only. The Type I Format Type descriptor uses `bSamFreqType`
+followed by 24-bit little-endian `tSamFreq` entries, as defined by USB Audio
+Data Formats 1.0 section 2.2.5.
 
 The allocated RP2350 endpoint buffer is sized for the largest stream,
 24-bit stereo at 96 kHz:
@@ -35,12 +36,17 @@ The descriptor `wMaxPacketSize` is still written per alternate setting:
 
 - 16-bit stereo at 96 kHz: 384 bytes
 - 24-bit stereo at 96 kHz: 576 bytes
+- 32-bit stereo at 48 kHz plus one adaptive OUT frame of headroom: 392 bytes
 
 ## Synchronization and feedback
 
-Both audio data endpoints are synchronous isochronous endpoints. In UAC1 terms,
-that means the stream is synchronized to the USB SOF, and the standard data
-endpoint descriptors set `bRefresh = 0` and `bSynchAddress = 0`.
+The AudioStreaming OUT data endpoints are adaptive isochronous endpoints. The
+host chooses the packet cadence, and the firmware accepts the packet sizes that
+arrive for the active format.
+
+The AudioStreaming IN data endpoints are asynchronous isochronous endpoints. The
+firmware chooses the packet cadence with a millisecond packet accumulator for
+44.1/88.2 kHz and exact frame counts for 48/96 kHz.
 
 This firmware does not implement an explicit feedback endpoint.
 
@@ -52,10 +58,9 @@ is correct when the device has an independent audio master clock and the host
 must chase it.
 
 The Pico 2 loopback firmware has no independent DAC/ADC/I2S master clock. It can
-derive packet cadence from USB frames and generate 44.1/88.2 kHz variable-size
-packets with a frame accumulator. Advertising asynchronous OUT plus feedback
-would therefore imply a clock relationship that this firmware does not actually
-own.
+accept host-paced OUT packets and generate IN packets from USB frame cadence.
+Advertising asynchronous OUT plus feedback would therefore imply a clock
+relationship that this firmware does not actually own.
 
 If this project later grows an external I2S codec clock or another free-running
 audio clock, the sync model should be revisited. At that point, an asynchronous

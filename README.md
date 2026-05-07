@@ -9,6 +9,7 @@ Supported alternate settings:
 
 - 16-bit PCM: 44.1 kHz, 48 kHz, 88.2 kHz, 96 kHz
 - 24-bit PCM: 44.1 kHz, 48 kHz, 88.2 kHz, 96 kHz
+- 32-bit PCM: 44.1 kHz, 48 kHz
 
 Build:
 
@@ -40,6 +41,7 @@ Host-side bit-perfect loopback checks live in
 cargo loopback-check -- list
 cargo loopback-check -- test --rate 48000 --bits 16 --seconds 3
 cargo loopback-check -- test --rate 48000 --bits 24 --timing events --capture-mode shared
+cargo loopback-check -- test --rate 48000 --bits 32 --timing events
 ```
 
 Shared capture tests set the selected Windows capture shared-mode format to the

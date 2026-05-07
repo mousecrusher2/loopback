@@ -79,7 +79,10 @@ fn main() -> Result<()> {
             };
             let mut failures = 0;
             for rate in [96_000u32, 88_200, 48_000, 44_100] {
-                for bits in [24u16, 16] {
+                for bits in [32u16, 24, 16] {
+                    if bits == 32 && !matches!(rate, 44_100 | 48_000) {
+                        continue;
+                    }
                     let config = AudioConfig {
                         rate,
                         bits,
@@ -116,7 +119,7 @@ fn main() -> Result<()> {
                             println!("{rate:>6} Hz {bits:>2}-bit: ERROR {err:#}");
                         }
                     }
-                    thread::sleep(Duration::from_millis(2_000));
+                    thread::sleep(Duration::from_millis(5_000));
                 }
             }
             if failures == 0 {

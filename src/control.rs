@@ -1,7 +1,10 @@
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::types::InterfaceNumber;
 
-use crate::audio::{AudioState, StreamDirection, closest_supported_rate};
+use crate::audio::{
+    AudioState, SAMPLE_WIDTH_16_ALT, SAMPLE_WIDTH_24_ALT, SAMPLE_WIDTH_32_ALT, StreamDirection,
+    closest_supported_rate_for_alt,
+};
 use crate::diag;
 use crate::tasks::{AudioPipe, PacketLenQueue};
 
@@ -18,8 +21,8 @@ pub struct AudioControlHandler {
     packet_lens: &'static PacketLenQueue,
     out_streaming_if: InterfaceNumber,
     in_streaming_if: InterfaceNumber,
-    out_ep_addrs: [u8; 2],
-    in_ep_addrs: [u8; 2],
+    out_ep_addrs: [u8; 3],
+    in_ep_addrs: [u8; 3],
 }
 
 impl AudioControlHandler {
@@ -29,8 +32,8 @@ impl AudioControlHandler {
         packet_lens: &'static PacketLenQueue,
         out_streaming_if: InterfaceNumber,
         in_streaming_if: InterfaceNumber,
-        out_ep_addrs: [u8; 2],
-        in_ep_addrs: [u8; 2],
+        out_ep_addrs: [u8; 3],
+        in_ep_addrs: [u8; 3],
     ) -> Self {
         Self {
             state,
@@ -43,13 +46,20 @@ impl AudioControlHandler {
         }
     }
 
-    fn direction_for_endpoint(&self, ep_addr: u8) -> Option<StreamDirection> {
-        if self.out_ep_addrs.contains(&ep_addr) {
-            Some(StreamDirection::Out)
-        } else if self.in_ep_addrs.contains(&ep_addr) {
-            Some(StreamDirection::In)
+    fn endpoint_stream(&self, ep_addr: u8) -> Option<(StreamDirection, u8)> {
+        const ALTS: [u8; 3] = [
+            SAMPLE_WIDTH_16_ALT,
+            SAMPLE_WIDTH_24_ALT,
+            SAMPLE_WIDTH_32_ALT,
+        ];
+
+        if let Some(index) = self.out_ep_addrs.iter().position(|addr| *addr == ep_addr) {
+            Some((StreamDirection::Out, ALTS[index]))
         } else {
-            None
+            self.in_ep_addrs
+                .iter()
+                .position(|addr| *addr == ep_addr)
+                .map(|index| (StreamDirection::In, ALTS[index]))
         }
     }
 
@@ -78,9 +88,18 @@ impl embassy_usb::Handler for AudioControlHandler {
     fn set_alternate_setting(&mut self, iface: InterfaceNumber, alternate_setting: u8) {
         if let Some(direction) = self.direction_for_interface(iface) {
             self.state.set_alt(direction, alternate_setting);
+            let rate =
+                closest_supported_rate_for_alt(alternate_setting, self.state.rate_hz(direction));
+            self.state.set_rate_hz(direction, rate);
             match direction {
-                StreamDirection::Out => diag::set_out_alt(alternate_setting),
-                StreamDirection::In => diag::set_in_alt(alternate_setting),
+                StreamDirection::Out => {
+                    diag::set_out_alt(alternate_setting);
+                    diag::set_out_rate(rate);
+                }
+                StreamDirection::In => {
+                    diag::set_in_alt(alternate_setting);
+                    diag::set_in_rate(rate);
+                }
             }
             self.pipe.clear();
             self.packet_lens.clear();
@@ -99,14 +118,14 @@ impl embassy_usb::Handler for AudioControlHandler {
             return None;
         }
 
-        let direction = self.direction_for_endpoint(ep_addr)?;
+        let (direction, alt) = self.endpoint_stream(ep_addr)?;
 
         if data.len() != 3 {
             return Some(OutResponse::Rejected);
         }
 
         let requested = u32::from(data[0]) | (u32::from(data[1]) << 8) | (u32::from(data[2]) << 16);
-        let rate = closest_supported_rate(requested);
+        let rate = closest_supported_rate_for_alt(alt, requested);
         self.state.set_rate_hz(direction, rate);
         match direction {
             StreamDirection::Out => diag::set_out_rate(rate),
@@ -128,11 +147,12 @@ impl embassy_usb::Handler for AudioControlHandler {
             return None;
         }
 
-        let direction = self.direction_for_endpoint(ep_addr)?;
+        let (direction, alt) = self.endpoint_stream(ep_addr)?;
 
         let value = match req.request {
-            GET_CUR => self.state.rate_hz(direction),
+            GET_CUR => closest_supported_rate_for_alt(alt, self.state.rate_hz(direction)),
             GET_MIN => 44_100,
+            GET_MAX if alt == SAMPLE_WIDTH_32_ALT => 48_000,
             GET_MAX => 96_000,
             GET_RES => 1,
             _ => return Some(InResponse::Rejected),

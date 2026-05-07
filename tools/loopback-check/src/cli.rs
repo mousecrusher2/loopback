@@ -69,7 +69,7 @@ pub struct TestArgs {
     #[arg(long, default_value_t = 48_000)]
     pub rate: u32,
 
-    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u16).range(16..=24))]
+    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u16).range(16..=32))]
     pub bits: u16,
 
     #[arg(long, default_value_t = 3.0)]

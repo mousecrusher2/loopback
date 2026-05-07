@@ -2,7 +2,7 @@
 #![no_std]
 
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3};
+use embassy_futures::join::join3;
 use embassy_usb::{Builder, Config};
 use panic_halt as _;
 use pico2_uac1_loopback::audio::AudioState;
@@ -21,13 +21,13 @@ async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let driver = usb_driver(p.USB);
 
-    static CONFIG_DESCRIPTOR: StaticCell<[u8; 512]> = StaticCell::new();
+    static CONFIG_DESCRIPTOR: StaticCell<[u8; 1024]> = StaticCell::new();
     static BOS_DESCRIPTOR: StaticCell<[u8; 32]> = StaticCell::new();
     static MSOS_DESCRIPTOR: StaticCell<[u8; 32]> = StaticCell::new();
     static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
     static HANDLER: StaticCell<AudioControlHandler> = StaticCell::new();
 
-    let config_descriptor = CONFIG_DESCRIPTOR.init([0; 512]);
+    let config_descriptor = CONFIG_DESCRIPTOR.init([0; 1024]);
     let bos_descriptor = BOS_DESCRIPTOR.init([0; 32]);
     let msos_descriptor = MSOS_DESCRIPTOR.init([0; 32]);
     let control_buf = CONTROL_BUF.init([0; 64]);
@@ -35,7 +35,7 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::new(0xcafe, 0x4001);
     config.manufacturer = Some("Embassy");
     config.product = Some("Pico 2 UAC1 Loopback");
-    config.serial_number = Some("pico2-loopback-0003");
+    config.serial_number = Some("pico2-loopback-0004");
     config.max_packet_size_0 = 64;
     config.max_power = 100;
 
@@ -65,16 +65,18 @@ async fn main(_spawner: Spawner) {
     join3(
         usb.run(),
         async {
-            join(
+            join3(
                 out_task::<UsbDriver>(endpoints.out_ep16, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
                 out_task::<UsbDriver>(endpoints.out_ep24, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
+                out_task::<UsbDriver>(endpoints.out_ep32, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
             )
             .await;
         },
         async {
-            join(
+            join3(
                 in_task::<UsbDriver>(endpoints.in_ep16, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
                 in_task::<UsbDriver>(endpoints.in_ep24, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
+                in_task::<UsbDriver>(endpoints.in_ep32, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
             )
             .await;
         },

@@ -19,6 +19,8 @@ use crate::types::{
     OpenedStream, StreamStats, StreamTiming, frames_from_ms, polling_sleep,
 };
 
+const STREAM_START_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub fn run_one(
     config: AudioConfig,
     selector: DeviceSelector,
@@ -48,7 +50,7 @@ pub fn run_one(
         .context("spawn render thread")?;
 
     render_started_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(STREAM_START_TIMEOUT)
         .context("render stream did not start")??;
 
     let capture_selector = selector.clone();
@@ -66,25 +68,39 @@ pub fn run_one(
         })
         .context("spawn capture thread")?;
 
-    if let Err(err) = capture_started_rx
-        .recv_timeout(Duration::from_secs(5))
-        .context("capture stream did not start")
-        .and_then(|result| result)
-    {
-        drop(payload_start_tx);
-        let _ = join_thread(render_thread, "render");
-        return Err(err);
+    match capture_started_rx.recv_timeout(STREAM_START_TIMEOUT) {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            stop_capture.store(true, Ordering::SeqCst);
+            drop(payload_start_tx);
+            let _ = join_thread(render_thread, "render");
+            let _ = join_thread(capture_thread, "capture");
+            return Err(err);
+        }
+        Err(err) => {
+            stop_capture.store(true, Ordering::SeqCst);
+            drop(payload_start_tx);
+            let _ = join_thread(render_thread, "render");
+            return Err(anyhow!("capture stream did not start: {err}"));
+        }
     }
 
     thread::sleep(Duration::from_millis(config.pre_roll_ms));
-    payload_start_tx
+    if let Err(err) = payload_start_tx
         .send(())
-        .context("signal render payload start")?;
+        .context("signal render payload start")
+    {
+        stop_capture.store(true, Ordering::SeqCst);
+        let _ = join_thread(capture_thread, "capture");
+        return Err(err);
+    }
 
-    let render_stats = join_thread(render_thread, "render")?;
+    let render_result = join_thread(render_thread, "render");
     thread::sleep(Duration::from_millis(config.tail_ms));
     stop_capture.store(true, Ordering::SeqCst);
-    let (captured, capture_stats) = join_thread(capture_thread, "capture")?;
+    let capture_result = join_thread(capture_thread, "capture");
+    let render_stats = render_result?;
+    let (captured, capture_stats) = capture_result?;
 
     let report = analyze(&config, &expected, &captured, capture_stats, render_stats);
     if let Some(dir) = dump_dir {

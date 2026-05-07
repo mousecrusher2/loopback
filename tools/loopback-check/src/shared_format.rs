@@ -313,4 +313,15 @@ mod tests {
         assert_eq!(&blob[20..24], &CHANNEL_MASK_STEREO.to_le_bytes());
         assert_eq!(&blob[24..40], &SUBTYPE_PCM_BYTES);
     }
+
+    #[test]
+    fn waveformat_extensible_blob_matches_48k_32bit_stereo() {
+        let blob = make_waveformat_extensible_blob(48_000, 32);
+
+        assert_eq!(blob.len(), 40);
+        assert_eq!(&blob[8..12], &384_000u32.to_le_bytes());
+        assert_eq!(&blob[12..14], &8u16.to_le_bytes());
+        assert_eq!(&blob[14..16], &32u16.to_le_bytes());
+        assert_eq!(&blob[18..20], &32u16.to_le_bytes());
+    }
 }

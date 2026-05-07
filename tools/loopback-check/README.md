@@ -12,6 +12,7 @@ Run one bit-perfect check:
 
 ```powershell
 cargo loopback-check -- test --rate 48000 --bits 16 --seconds 3 --dump-dir artifacts/loopback-48k16
+cargo loopback-check -- test --rate 48000 --bits 32 --seconds 3 --dump-dir artifacts/loopback-48k32
 ```
 
 Run with WASAPI shared-mode capture while keeping render exclusive:
@@ -34,6 +35,9 @@ Run the full firmware matrix:
 ```powershell
 cargo loopback-check -- matrix --seconds 3 --dump-dir artifacts/loopback-matrix
 ```
+
+The matrix covers 16-bit and 24-bit PCM at 44.1/48/88.2/96 kHz, plus 32-bit
+PCM at 44.1/48 kHz.
 
 The checker opens the render endpoint in WASAPI exclusive mode. Capture defaults
 to exclusive mode, or can be switched to shared mode with `--capture-mode shared`.
