@@ -29,7 +29,8 @@ pub async fn out_task<'d, D: Driver<'d>>(
                         continue;
                     }
                     diag::add_out_packet(len);
-                    let bytes_per_audio_frame = state.out_bytes_per_audio_frame();
+                    let out_format = state.format(StreamDirection::Out);
+                    let bytes_per_audio_frame = out_format.bytes_per_audio_frame();
                     if !state.loopback_format_matches()
                         || bytes_per_audio_frame == 0
                         || len % bytes_per_audio_frame != 0
@@ -83,7 +84,8 @@ pub async fn in_task<'d, D: Driver<'d>>(
         ep.wait_enabled().await;
 
         loop {
-            let bytes_per_audio_frame = state.in_bytes_per_audio_frame();
+            let in_format = state.format(StreamDirection::In);
+            let bytes_per_audio_frame = in_format.bytes_per_audio_frame();
             if bytes_per_audio_frame == 0 {
                 embassy_futures::yield_now().await;
                 continue;
@@ -97,10 +99,10 @@ pub async fn in_task<'d, D: Driver<'d>>(
                     usize::from(len)
                 } else {
                     diag::add_in_queue_empty();
-                    clock.next_len(state.rate_hz(StreamDirection::In), bytes_per_audio_frame)
+                    clock.next_len(in_format.rate_hz, bytes_per_audio_frame)
                 }
             } else {
-                clock.next_len(state.rate_hz(StreamDirection::In), bytes_per_audio_frame)
+                clock.next_len(in_format.rate_hz, bytes_per_audio_frame)
             };
             packet[..packet_len].fill(0);
             diag::add_in_packet(packet_len);

@@ -87,10 +87,7 @@ impl embassy_usb::Handler for AudioControlHandler {
 
     fn set_alternate_setting(&mut self, iface: InterfaceNumber, alternate_setting: u8) {
         if let Some(direction) = self.direction_for_interface(iface) {
-            self.state.set_alt(direction, alternate_setting);
-            let rate =
-                closest_supported_rate_for_alt(alternate_setting, self.state.rate_hz(direction));
-            self.state.set_rate_hz(direction, rate);
+            let rate = self.state.set_alt(direction, alternate_setting);
             match direction {
                 StreamDirection::Out => {
                     diag::set_out_alt(alternate_setting);
@@ -126,7 +123,7 @@ impl embassy_usb::Handler for AudioControlHandler {
 
         let requested = u32::from(data[0]) | (u32::from(data[1]) << 8) | (u32::from(data[2]) << 16);
         let rate = closest_supported_rate_for_alt(alt, requested);
-        self.state.set_rate_hz(direction, rate);
+        let rate = self.state.set_rate_hz(direction, rate);
         match direction {
             StreamDirection::Out => diag::set_out_rate(rate),
             StreamDirection::In => diag::set_in_rate(rate),

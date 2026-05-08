@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const CHANNEL_COUNT: u8 = 2;
 pub const SAMPLE_WIDTH_16_ALT: u8 = 1;
@@ -20,68 +20,102 @@ pub enum StreamDirection {
     In,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct StreamFormat {
+    pub alt: u8,
+    pub rate_hz: u32,
+}
+
+impl StreamFormat {
+    pub const fn new(alt: u8, rate_hz: u32) -> Self {
+        Self { alt, rate_hz }
+    }
+
+    pub fn bytes_per_audio_frame(self) -> usize {
+        bytes_per_audio_frame(self.alt)
+    }
+}
+
 pub struct AudioState {
-    out_alt: AtomicU8,
-    in_alt: AtomicU8,
-    out_rate_hz: AtomicU32,
-    in_rate_hz: AtomicU32,
+    out: AtomicU32,
+    in_: AtomicU32,
 }
 
 impl AudioState {
     pub const fn new() -> Self {
         Self {
-            out_alt: AtomicU8::new(0),
-            in_alt: AtomicU8::new(0),
-            out_rate_hz: AtomicU32::new(DEFAULT_SAMPLE_RATE),
-            in_rate_hz: AtomicU32::new(DEFAULT_SAMPLE_RATE),
+            out: AtomicU32::new(encode_stream_format(StreamFormat::new(
+                0,
+                DEFAULT_SAMPLE_RATE,
+            ))),
+            in_: AtomicU32::new(encode_stream_format(StreamFormat::new(
+                0,
+                DEFAULT_SAMPLE_RATE,
+            ))),
         }
     }
 
     pub fn reset(&self) {
-        self.out_alt.store(0, Ordering::Relaxed);
-        self.in_alt.store(0, Ordering::Relaxed);
-        self.out_rate_hz
-            .store(DEFAULT_SAMPLE_RATE, Ordering::Relaxed);
-        self.in_rate_hz
-            .store(DEFAULT_SAMPLE_RATE, Ordering::Relaxed);
+        self.store_format(
+            StreamDirection::Out,
+            StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
+        );
+        self.store_format(
+            StreamDirection::In,
+            StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
+        );
     }
 
-    pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) {
-        match direction {
-            StreamDirection::Out => self.out_alt.store(alternate_setting, Ordering::Relaxed),
-            StreamDirection::In => self.in_alt.store(alternate_setting, Ordering::Relaxed),
-        }
+    pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) -> u32 {
+        let current = self.format(direction);
+        let rate_hz = closest_supported_rate_for_alt(alternate_setting, current.rate_hz);
+        self.store_format(direction, StreamFormat::new(alternate_setting, rate_hz));
+        rate_hz
     }
 
-    pub fn set_rate_hz(&self, direction: StreamDirection, rate_hz: u32) {
-        match direction {
-            StreamDirection::Out => self.out_rate_hz.store(rate_hz, Ordering::Relaxed),
-            StreamDirection::In => self.in_rate_hz.store(rate_hz, Ordering::Relaxed),
-        }
+    pub fn set_rate_hz(&self, direction: StreamDirection, rate_hz: u32) -> u32 {
+        let current = self.format(direction);
+        let rate_hz = closest_supported_rate_for_alt(current.alt, rate_hz);
+        self.store_format(direction, StreamFormat::new(current.alt, rate_hz));
+        rate_hz
     }
 
     pub fn rate_hz(&self, direction: StreamDirection) -> u32 {
+        self.format(direction).rate_hz
+    }
+
+    pub fn format(&self, direction: StreamDirection) -> StreamFormat {
+        let bits = match direction {
+            StreamDirection::Out => self.out.load(Ordering::Relaxed),
+            StreamDirection::In => self.in_.load(Ordering::Relaxed),
+        };
+        decode_stream_format(bits)
+    }
+
+    fn store_format(&self, direction: StreamDirection, format: StreamFormat) {
         match direction {
-            StreamDirection::Out => self.out_rate_hz.load(Ordering::Relaxed),
-            StreamDirection::In => self.in_rate_hz.load(Ordering::Relaxed),
+            StreamDirection::Out => self
+                .out
+                .store(encode_stream_format(format), Ordering::Relaxed),
+            StreamDirection::In => self
+                .in_
+                .store(encode_stream_format(format), Ordering::Relaxed),
         }
     }
 
     pub fn in_bytes_per_audio_frame(&self) -> usize {
-        bytes_per_audio_frame(self.in_alt.load(Ordering::Relaxed))
+        self.format(StreamDirection::In).bytes_per_audio_frame()
     }
 
     pub fn out_bytes_per_audio_frame(&self) -> usize {
-        bytes_per_audio_frame(self.out_alt.load(Ordering::Relaxed))
+        self.format(StreamDirection::Out).bytes_per_audio_frame()
     }
 
     pub fn loopback_format_matches(&self) -> bool {
-        let out_alt = self.out_alt.load(Ordering::Relaxed);
-        let in_alt = self.in_alt.load(Ordering::Relaxed);
+        let out = self.format(StreamDirection::Out);
+        let in_ = self.format(StreamDirection::In);
 
-        out_alt != 0
-            && out_alt == in_alt
-            && self.out_rate_hz.load(Ordering::Relaxed) == self.in_rate_hz.load(Ordering::Relaxed)
+        out.alt != 0 && out.alt == in_.alt && out.rate_hz == in_.rate_hz
     }
 }
 
@@ -89,6 +123,14 @@ impl Default for AudioState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+const fn encode_stream_format(format: StreamFormat) -> u32 {
+    (format.rate_hz << 8) | format.alt as u32
+}
+
+const fn decode_stream_format(bits: u32) -> StreamFormat {
+    StreamFormat::new((bits & 0xff) as u8, bits >> 8)
 }
 
 pub struct PacketClock {
@@ -309,5 +351,24 @@ mod tests {
         state.set_rate_hz(StreamDirection::Out, 48_000);
         state.set_rate_hz(StreamDirection::In, 48_000);
         assert!(state.loopback_format_matches());
+    }
+
+    #[test]
+    fn stream_format_snapshot_keeps_32bit_rate_within_packet_budget() {
+        let state = AudioState::new();
+
+        state.set_alt(StreamDirection::In, SAMPLE_WIDTH_24_ALT);
+        assert_eq!(state.set_rate_hz(StreamDirection::In, 96_000), 96_000);
+
+        let rate = state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
+        let format = state.format(StreamDirection::In);
+
+        assert_eq!(rate, 48_000);
+        assert_eq!(format.alt, SAMPLE_WIDTH_32_ALT);
+        assert_eq!(format.rate_hz, 48_000);
+        assert!(
+            PacketClock::new().next_len(format.rate_hz, format.bytes_per_audio_frame())
+                <= MAX_PACKET_SIZE
+        );
     }
 }
