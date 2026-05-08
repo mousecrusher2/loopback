@@ -47,13 +47,6 @@ impl AudioFormats {
         Self { out, in_ }
     }
 
-    pub fn stream(self, direction: StreamDirection) -> StreamFormat {
-        match direction {
-            StreamDirection::Out => self.out,
-            StreamDirection::In => self.in_,
-        }
-    }
-
     pub fn loopback_format_matches(self) -> bool {
         self.out.alt != 0 && self.out.alt == self.in_.alt && self.out.rate_hz == self.in_.rate_hz
     }
@@ -87,14 +80,6 @@ impl AudioState {
         self.update_format(direction, |current| StreamFormat::new(current.alt, rate_hz))
     }
 
-    pub fn rate_hz(&self, direction: StreamDirection) -> u32 {
-        self.format(direction).rate_hz
-    }
-
-    pub fn format(&self, direction: StreamDirection) -> StreamFormat {
-        self.formats().stream(direction)
-    }
-
     pub fn formats(&self) -> AudioFormats {
         decode_audio_formats(self.formats.load(Ordering::Relaxed))
     }
@@ -107,7 +92,11 @@ impl AudioState {
         loop {
             let current_bits = self.formats.load(Ordering::Relaxed);
             let mut formats = decode_audio_formats(current_bits);
-            let next_format = normalize_stream_format(update(formats.stream(direction)));
+            let current_format = match direction {
+                StreamDirection::Out => formats.out,
+                StreamDirection::In => formats.in_,
+            };
+            let next_format = normalize_stream_format(update(current_format));
 
             match direction {
                 StreamDirection::Out => formats.out = next_format,
@@ -128,18 +117,6 @@ impl AudioState {
                 return next_format;
             }
         }
-    }
-
-    pub fn in_bytes_per_audio_frame(&self) -> usize {
-        self.format(StreamDirection::In).bytes_per_audio_frame()
-    }
-
-    pub fn out_bytes_per_audio_frame(&self) -> usize {
-        self.format(StreamDirection::Out).bytes_per_audio_frame()
-    }
-
-    pub fn loopback_format_matches(&self) -> bool {
-        self.formats().loopback_format_matches()
     }
 }
 
@@ -403,24 +380,24 @@ mod tests {
     #[test]
     fn loopback_only_matches_identical_active_formats() {
         let state = AudioState::new();
-        assert!(!state.loopback_format_matches());
+        assert!(!state.formats().loopback_format_matches());
 
         state.set_alt(StreamDirection::Out, SAMPLE_WIDTH_16_ALT);
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_16_ALT);
-        assert!(state.loopback_format_matches());
+        assert!(state.formats().loopback_format_matches());
 
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_24_ALT);
-        assert!(!state.loopback_format_matches());
+        assert!(!state.formats().loopback_format_matches());
 
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_16_ALT);
         state.set_rate_hz(StreamDirection::In, 44_100);
-        assert!(!state.loopback_format_matches());
+        assert!(!state.formats().loopback_format_matches());
 
         state.set_alt(StreamDirection::Out, SAMPLE_WIDTH_32_ALT);
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
         state.set_rate_hz(StreamDirection::Out, 48_000);
         state.set_rate_hz(StreamDirection::In, 48_000);
-        assert!(state.loopback_format_matches());
+        assert!(state.formats().loopback_format_matches());
     }
 
     #[test]
@@ -434,7 +411,7 @@ mod tests {
         );
 
         let stored = state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
-        let format = state.format(StreamDirection::In);
+        let format = state.formats().in_;
 
         assert_eq!(stored.rate_hz, 48_000);
         assert_eq!(format.alt, SAMPLE_WIDTH_32_ALT);

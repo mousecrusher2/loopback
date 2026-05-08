@@ -146,8 +146,14 @@ impl embassy_usb::Handler for AudioControlHandler {
 
         let (direction, alt) = self.endpoint_stream(ep_addr)?;
 
+        let formats = self.state.formats();
+        let current_rate = match direction {
+            StreamDirection::Out => formats.out.rate_hz,
+            StreamDirection::In => formats.in_.rate_hz,
+        };
+
         let value = match req.request {
-            GET_CUR => closest_supported_rate_for_alt(alt, self.state.rate_hz(direction)),
+            GET_CUR => closest_supported_rate_for_alt(alt, current_rate),
             GET_MIN => 44_100,
             GET_MAX if alt == SAMPLE_WIDTH_32_ALT => 48_000,
             GET_MAX => 96_000,
