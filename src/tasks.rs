@@ -3,9 +3,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::pipe::Pipe;
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
 
-use crate::audio::{
-    AudioState, MAX_PACKET_SIZE, PACKET_LEN_QUEUE_SIZE, PIPE_SIZE, PacketClock, StreamDirection,
-};
+use crate::audio::{AudioState, MAX_PACKET_SIZE, PACKET_LEN_QUEUE_SIZE, PIPE_SIZE, PacketClock};
 use crate::diag;
 
 pub type AudioPipe = Pipe<CriticalSectionRawMutex, PIPE_SIZE>;
@@ -29,9 +27,10 @@ pub async fn out_task<'d, D: Driver<'d>>(
                         continue;
                     }
                     diag::add_out_packet(len);
-                    let out_format = state.format(StreamDirection::Out);
+                    let formats = state.formats();
+                    let out_format = formats.out;
                     let bytes_per_audio_frame = out_format.bytes_per_audio_frame();
-                    if !state.loopback_format_matches()
+                    if !formats.loopback_format_matches()
                         || bytes_per_audio_frame == 0
                         || len % bytes_per_audio_frame != 0
                     {
@@ -84,14 +83,15 @@ pub async fn in_task<'d, D: Driver<'d>>(
         ep.wait_enabled().await;
 
         loop {
-            let in_format = state.format(StreamDirection::In);
+            let formats = state.formats();
+            let in_format = formats.in_;
             let bytes_per_audio_frame = in_format.bytes_per_audio_frame();
             if bytes_per_audio_frame == 0 {
                 embassy_futures::yield_now().await;
                 continue;
             }
 
-            let format_matches = state.loopback_format_matches();
+            let format_matches = formats.loopback_format_matches();
             let mut read_loopback = false;
             let packet_len = if format_matches {
                 if let Ok(len) = packet_lens.try_receive() {

@@ -20,7 +20,7 @@ pub enum StreamDirection {
     In,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamFormat {
     pub alt: u8,
     pub rate_hz: u32,
@@ -36,48 +36,55 @@ impl StreamFormat {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AudioFormats {
+    pub out: StreamFormat,
+    pub in_: StreamFormat,
+}
+
+impl AudioFormats {
+    pub const fn new(out: StreamFormat, in_: StreamFormat) -> Self {
+        Self { out, in_ }
+    }
+
+    pub fn stream(self, direction: StreamDirection) -> StreamFormat {
+        match direction {
+            StreamDirection::Out => self.out,
+            StreamDirection::In => self.in_,
+        }
+    }
+
+    pub fn loopback_format_matches(self) -> bool {
+        self.out.alt != 0 && self.out.alt == self.in_.alt && self.out.rate_hz == self.in_.rate_hz
+    }
+}
+
 pub struct AudioState {
-    out: AtomicU32,
-    in_: AtomicU32,
+    formats: AtomicU32,
 }
 
 impl AudioState {
     pub const fn new() -> Self {
         Self {
-            out: AtomicU32::new(encode_stream_format(StreamFormat::new(
-                0,
-                DEFAULT_SAMPLE_RATE,
-            ))),
-            in_: AtomicU32::new(encode_stream_format(StreamFormat::new(
-                0,
-                DEFAULT_SAMPLE_RATE,
-            ))),
+            formats: AtomicU32::new(encode_audio_formats(default_audio_formats())),
         }
     }
 
     pub fn reset(&self) {
-        self.store_format(
-            StreamDirection::Out,
-            StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
-        );
-        self.store_format(
-            StreamDirection::In,
-            StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
+        self.formats.store(
+            encode_audio_formats(default_audio_formats()),
+            Ordering::Relaxed,
         );
     }
 
-    pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) -> u32 {
-        let current = self.format(direction);
-        let rate_hz = closest_supported_rate_for_alt(alternate_setting, current.rate_hz);
-        self.store_format(direction, StreamFormat::new(alternate_setting, rate_hz));
-        rate_hz
+    pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) -> StreamFormat {
+        self.update_format(direction, |current| {
+            StreamFormat::new(alternate_setting, current.rate_hz)
+        })
     }
 
-    pub fn set_rate_hz(&self, direction: StreamDirection, rate_hz: u32) -> u32 {
-        let current = self.format(direction);
-        let rate_hz = closest_supported_rate_for_alt(current.alt, rate_hz);
-        self.store_format(direction, StreamFormat::new(current.alt, rate_hz));
-        rate_hz
+    pub fn set_rate_hz(&self, direction: StreamDirection, rate_hz: u32) -> StreamFormat {
+        self.update_format(direction, |current| StreamFormat::new(current.alt, rate_hz))
     }
 
     pub fn rate_hz(&self, direction: StreamDirection) -> u32 {
@@ -85,21 +92,41 @@ impl AudioState {
     }
 
     pub fn format(&self, direction: StreamDirection) -> StreamFormat {
-        let bits = match direction {
-            StreamDirection::Out => self.out.load(Ordering::Relaxed),
-            StreamDirection::In => self.in_.load(Ordering::Relaxed),
-        };
-        decode_stream_format(bits)
+        self.formats().stream(direction)
     }
 
-    fn store_format(&self, direction: StreamDirection, format: StreamFormat) {
-        match direction {
-            StreamDirection::Out => self
-                .out
-                .store(encode_stream_format(format), Ordering::Relaxed),
-            StreamDirection::In => self
-                .in_
-                .store(encode_stream_format(format), Ordering::Relaxed),
+    pub fn formats(&self) -> AudioFormats {
+        decode_audio_formats(self.formats.load(Ordering::Relaxed))
+    }
+
+    fn update_format(
+        &self,
+        direction: StreamDirection,
+        update: impl Fn(StreamFormat) -> StreamFormat,
+    ) -> StreamFormat {
+        loop {
+            let current_bits = self.formats.load(Ordering::Relaxed);
+            let mut formats = decode_audio_formats(current_bits);
+            let next_format = normalize_stream_format(update(formats.stream(direction)));
+
+            match direction {
+                StreamDirection::Out => formats.out = next_format,
+                StreamDirection::In => formats.in_ = next_format,
+            }
+
+            let next_bits = encode_audio_formats(formats);
+            if self
+                .formats
+                .compare_exchange_weak(
+                    current_bits,
+                    next_bits,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                return next_format;
+            }
         }
     }
 
@@ -112,10 +139,7 @@ impl AudioState {
     }
 
     pub fn loopback_format_matches(&self) -> bool {
-        let out = self.format(StreamDirection::Out);
-        let in_ = self.format(StreamDirection::In);
-
-        out.alt != 0 && out.alt == in_.alt && out.rate_hz == in_.rate_hz
+        self.formats().loopback_format_matches()
     }
 }
 
@@ -125,12 +149,58 @@ impl Default for AudioState {
     }
 }
 
-const fn encode_stream_format(format: StreamFormat) -> u32 {
-    (format.rate_hz << 8) | format.alt as u32
+const fn default_audio_formats() -> AudioFormats {
+    AudioFormats::new(
+        StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
+        StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
+    )
 }
 
-const fn decode_stream_format(bits: u32) -> StreamFormat {
-    StreamFormat::new((bits & 0xff) as u8, bits >> 8)
+fn normalize_stream_format(format: StreamFormat) -> StreamFormat {
+    let alt = match format.alt {
+        0 | SAMPLE_WIDTH_16_ALT | SAMPLE_WIDTH_24_ALT | SAMPLE_WIDTH_32_ALT => format.alt,
+        _ => 0,
+    };
+    StreamFormat::new(alt, closest_supported_rate_for_alt(alt, format.rate_hz))
+}
+
+const fn encode_audio_formats(formats: AudioFormats) -> u32 {
+    encode_stream_format(formats.out) | (encode_stream_format(formats.in_) << 8)
+}
+
+const fn encode_stream_format(format: StreamFormat) -> u32 {
+    ((rate_code(format.rate_hz) as u32) << 4) | ((format.alt as u32) & 0x0f)
+}
+
+const fn decode_audio_formats(bits: u32) -> AudioFormats {
+    AudioFormats::new(
+        decode_stream_format(bits as u8),
+        decode_stream_format((bits >> 8) as u8),
+    )
+}
+
+const fn decode_stream_format(bits: u8) -> StreamFormat {
+    StreamFormat::new(bits & 0x0f, rate_hz_from_code(bits >> 4))
+}
+
+const fn rate_code(rate_hz: u32) -> u8 {
+    match rate_hz {
+        44_100 => 0,
+        48_000 => 1,
+        88_200 => 2,
+        96_000 => 3,
+        _ => 1,
+    }
+}
+
+const fn rate_hz_from_code(code: u8) -> u32 {
+    match code & 0x0f {
+        0 => 44_100,
+        1 => 48_000,
+        2 => 88_200,
+        3 => 96_000,
+        _ => DEFAULT_SAMPLE_RATE,
+    }
 }
 
 pub struct PacketClock {
@@ -358,17 +428,36 @@ mod tests {
         let state = AudioState::new();
 
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_24_ALT);
-        assert_eq!(state.set_rate_hz(StreamDirection::In, 96_000), 96_000);
+        assert_eq!(
+            state.set_rate_hz(StreamDirection::In, 96_000).rate_hz,
+            96_000
+        );
 
-        let rate = state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
+        let stored = state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
         let format = state.format(StreamDirection::In);
 
-        assert_eq!(rate, 48_000);
+        assert_eq!(stored.rate_hz, 48_000);
         assert_eq!(format.alt, SAMPLE_WIDTH_32_ALT);
         assert_eq!(format.rate_hz, 48_000);
         assert!(
             PacketClock::new().next_len(format.rate_hz, format.bytes_per_audio_frame())
                 <= MAX_PACKET_SIZE
         );
+    }
+
+    #[test]
+    fn audio_formats_snapshot_contains_out_and_in_together() {
+        let state = AudioState::new();
+
+        state.set_alt(StreamDirection::Out, SAMPLE_WIDTH_24_ALT);
+        state.set_rate_hz(StreamDirection::Out, 88_200);
+        state.set_alt(StreamDirection::In, SAMPLE_WIDTH_24_ALT);
+        state.set_rate_hz(StreamDirection::In, 88_200);
+
+        let formats = state.formats();
+
+        assert_eq!(formats.out, StreamFormat::new(SAMPLE_WIDTH_24_ALT, 88_200));
+        assert_eq!(formats.in_, StreamFormat::new(SAMPLE_WIDTH_24_ALT, 88_200));
+        assert!(formats.loopback_format_matches());
     }
 }
