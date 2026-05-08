@@ -2,8 +2,8 @@ use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestT
 use embassy_usb::types::InterfaceNumber;
 
 use crate::audio::{
-    AudioState, SAMPLE_WIDTH_16_ALT, SAMPLE_WIDTH_24_ALT, SAMPLE_WIDTH_32_ALT, StreamDirection,
-    closest_supported_rate_for_alt,
+    AudioState, SAMPLE_WIDTH_16_ALT, SAMPLE_WIDTH_24_ALT, SAMPLE_WIDTH_32_ALT, SampleRate,
+    StreamDirection,
 };
 use crate::diag;
 use crate::tasks::{AudioPipe, PacketLenQueue};
@@ -122,7 +122,13 @@ impl embassy_usb::Handler for AudioControlHandler {
         }
 
         let requested = u32::from(data[0]) | (u32::from(data[1]) << 8) | (u32::from(data[2]) << 16);
-        let rate = closest_supported_rate_for_alt(alt, requested);
+        let Some(rate) = SampleRate::from_hz(requested) else {
+            return Some(OutResponse::Rejected);
+        };
+        if !rate.is_supported_for_alt(alt) {
+            return Some(OutResponse::Rejected);
+        }
+
         let format = self.state.set_rate(direction, rate);
         match direction {
             StreamDirection::Out => diag::set_out_rate(format.rate.hz()),
@@ -153,7 +159,7 @@ impl embassy_usb::Handler for AudioControlHandler {
         };
 
         let value = match req.request {
-            GET_CUR => closest_supported_rate_for_alt(alt, current_rate.hz()).hz(),
+            GET_CUR => current_rate.for_alt_or_default(alt).hz(),
             GET_MIN => 44_100,
             GET_MAX if alt == SAMPLE_WIDTH_32_ALT => 48_000,
             GET_MAX => 96_000,

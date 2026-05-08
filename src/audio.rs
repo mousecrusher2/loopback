@@ -7,13 +7,6 @@ pub const SAMPLE_WIDTH_32_ALT: u8 = 3;
 pub const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
 pub const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
 pub const SUPPORTED_SAMPLE_RATES_32: [u32; 2] = [44_100, 48_000];
-const SUPPORTED_SAMPLE_RATE_CODES: [SampleRate; 4] = [
-    SampleRate::R44100,
-    SampleRate::R48000,
-    SampleRate::R88200,
-    SampleRate::R96000,
-];
-const SUPPORTED_SAMPLE_RATE_CODES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
 pub const MAX_PACKET_SIZE_16: usize = 97 * CHANNEL_COUNT as usize * 2;
 pub const MAX_PACKET_SIZE_24: usize = 97 * CHANNEL_COUNT as usize * 3;
 pub const MAX_PACKET_SIZE_32: usize = 49 * CHANNEL_COUNT as usize * 4;
@@ -43,6 +36,31 @@ impl SampleRate {
             Self::R48000 => 48_000,
             Self::R88200 => 88_200,
             Self::R96000 => 96_000,
+        }
+    }
+
+    pub const fn from_hz(rate_hz: u32) -> Option<Self> {
+        match rate_hz {
+            44_100 => Some(Self::R44100),
+            48_000 => Some(Self::R48000),
+            88_200 => Some(Self::R88200),
+            96_000 => Some(Self::R96000),
+            _ => None,
+        }
+    }
+
+    pub const fn is_supported_for_alt(self, alt: u8) -> bool {
+        match alt {
+            SAMPLE_WIDTH_32_ALT => matches!(self, Self::R44100 | Self::R48000),
+            _ => true,
+        }
+    }
+
+    pub const fn for_alt_or_default(self, alt: u8) -> Self {
+        if self.is_supported_for_alt(alt) {
+            self
+        } else {
+            DEFAULT_SAMPLE_RATE
         }
     }
 
@@ -169,12 +187,7 @@ fn normalize_stream_format(format: StreamFormat) -> StreamFormat {
         0 | SAMPLE_WIDTH_16_ALT | SAMPLE_WIDTH_24_ALT | SAMPLE_WIDTH_32_ALT => format.alt,
         _ => 0,
     };
-    let rate = if alt == SAMPLE_WIDTH_32_ALT {
-        closest_rate_in(format.rate.hz(), &SUPPORTED_SAMPLE_RATE_CODES_32)
-    } else {
-        format.rate
-    };
-    StreamFormat::new(alt, rate)
+    StreamFormat::new(alt, format.rate.for_alt_or_default(alt))
 }
 
 fn apply_stream_format_update(
@@ -262,33 +275,6 @@ pub fn bytes_per_audio_frame(alt: u8) -> usize {
     }
 }
 
-pub fn closest_supported_rate(rate: u32) -> SampleRate {
-    closest_rate_in(rate, &SUPPORTED_SAMPLE_RATE_CODES)
-}
-
-pub fn closest_supported_rate_for_alt(alt: u8, rate: u32) -> SampleRate {
-    if alt == SAMPLE_WIDTH_32_ALT {
-        closest_rate_in(rate, &SUPPORTED_SAMPLE_RATE_CODES_32)
-    } else {
-        closest_supported_rate(rate)
-    }
-}
-
-fn closest_rate_in(rate: u32, rates: &[SampleRate]) -> SampleRate {
-    let mut closest = rates[0];
-    let mut closest_diff = closest.hz().abs_diff(rate);
-
-    for candidate in rates.iter().copied().skip(1) {
-        let diff = candidate.hz().abs_diff(rate);
-        if diff < closest_diff {
-            closest = candidate;
-            closest_diff = diff;
-        }
-    }
-
-    closest
-}
-
 #[cfg(test)]
 #[embedded_test::tests]
 mod tests {
@@ -304,42 +290,27 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_sample_rates_round_to_nearest_supported_rate() {
-        assert_eq!(closest_supported_rate(44_100), SampleRate::R44100);
-        assert_eq!(closest_supported_rate(48_000), SampleRate::R48000);
-        assert_eq!(closest_supported_rate(88_200), SampleRate::R88200);
-        assert_eq!(closest_supported_rate(96_000), SampleRate::R96000);
-        assert_eq!(closest_supported_rate(45_000), SampleRate::R44100);
-        assert_eq!(closest_supported_rate(50_000), SampleRate::R48000);
-        assert_eq!(closest_supported_rate(90_000), SampleRate::R88200);
-        assert_eq!(closest_supported_rate(95_000), SampleRate::R96000);
+    fn sample_rate_from_hz_accepts_only_advertised_rates() {
+        assert_eq!(SampleRate::from_hz(44_100), Some(SampleRate::R44100));
+        assert_eq!(SampleRate::from_hz(48_000), Some(SampleRate::R48000));
+        assert_eq!(SampleRate::from_hz(88_200), Some(SampleRate::R88200));
+        assert_eq!(SampleRate::from_hz(96_000), Some(SampleRate::R96000));
+        assert_eq!(SampleRate::from_hz(45_000), None);
+        assert_eq!(SampleRate::from_hz(50_000), None);
+        assert_eq!(SampleRate::from_hz(90_000), None);
+        assert_eq!(SampleRate::from_hz(95_000), None);
     }
 
     #[test]
-    fn unsupported_32bit_sample_rates_round_to_44k1_or_48k() {
+    fn sample_rate_support_depends_on_alt_setting() {
+        assert!(SampleRate::R44100.is_supported_for_alt(SAMPLE_WIDTH_32_ALT));
+        assert!(SampleRate::R48000.is_supported_for_alt(SAMPLE_WIDTH_32_ALT));
+        assert!(!SampleRate::R88200.is_supported_for_alt(SAMPLE_WIDTH_32_ALT));
+        assert!(!SampleRate::R96000.is_supported_for_alt(SAMPLE_WIDTH_32_ALT));
+        assert!(SampleRate::R96000.is_supported_for_alt(SAMPLE_WIDTH_24_ALT));
         assert_eq!(
-            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 44_100),
-            SampleRate::R44100
-        );
-        assert_eq!(
-            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 48_000),
-            SampleRate::R48000
-        );
-        assert_eq!(
-            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 45_000),
-            SampleRate::R44100
-        );
-        assert_eq!(
-            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 50_000),
-            SampleRate::R48000
-        );
-        assert_eq!(
-            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 88_200),
-            SampleRate::R48000
-        );
-        assert_eq!(
-            closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 96_000),
-            SampleRate::R48000
+            SampleRate::R96000.for_alt_or_default(SAMPLE_WIDTH_32_ALT),
+            DEFAULT_SAMPLE_RATE
         );
     }
 
