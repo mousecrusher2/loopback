@@ -101,6 +101,12 @@ pub struct AudioState {
     formats: AtomicU32,
 }
 
+#[derive(Clone, Copy)]
+enum StreamFormatUpdate {
+    Alt(u8),
+    Rate(SampleRate),
+}
+
 impl AudioState {
     pub const fn new() -> Self {
         Self {
@@ -116,13 +122,11 @@ impl AudioState {
     }
 
     pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) -> StreamFormat {
-        self.update_format(direction, |current| {
-            StreamFormat::new(alternate_setting, current.rate)
-        })
+        self.update_format(direction, StreamFormatUpdate::Alt(alternate_setting))
     }
 
     pub fn set_rate(&self, direction: StreamDirection, rate: SampleRate) -> StreamFormat {
-        self.update_format(direction, |current| StreamFormat::new(current.alt, rate))
+        self.update_format(direction, StreamFormatUpdate::Rate(rate))
     }
 
     pub fn formats(&self) -> AudioFormats {
@@ -132,36 +136,22 @@ impl AudioState {
     fn update_format(
         &self,
         direction: StreamDirection,
-        update: impl Fn(StreamFormat) -> StreamFormat,
+        update: StreamFormatUpdate,
     ) -> StreamFormat {
-        loop {
-            let current_bits = self.formats.load(Ordering::Relaxed);
-            let mut formats = decode_audio_formats(current_bits);
-            let current_format = match direction {
-                StreamDirection::Out => formats.out,
-                StreamDirection::In => formats.in_,
-            };
-            let next_format = normalize_stream_format(update(current_format));
+        let previous_bits =
+            self.formats
+                .update(Ordering::Relaxed, Ordering::Relaxed, |current_bits| {
+                    let (formats, _) = apply_stream_format_update(
+                        decode_audio_formats(current_bits),
+                        direction,
+                        update,
+                    );
+                    encode_audio_formats(formats)
+                });
 
-            match direction {
-                StreamDirection::Out => formats.out = next_format,
-                StreamDirection::In => formats.in_ = next_format,
-            }
-
-            let next_bits = encode_audio_formats(formats);
-            if self
-                .formats
-                .compare_exchange_weak(
-                    current_bits,
-                    next_bits,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
-                .is_ok()
-            {
-                return next_format;
-            }
-        }
+        let (_, stored_format) =
+            apply_stream_format_update(decode_audio_formats(previous_bits), direction, update);
+        stored_format
     }
 }
 
@@ -189,6 +179,28 @@ fn normalize_stream_format(format: StreamFormat) -> StreamFormat {
         format.rate
     };
     StreamFormat::new(alt, rate)
+}
+
+fn apply_stream_format_update(
+    mut formats: AudioFormats,
+    direction: StreamDirection,
+    update: StreamFormatUpdate,
+) -> (AudioFormats, StreamFormat) {
+    let current = match direction {
+        StreamDirection::Out => formats.out,
+        StreamDirection::In => formats.in_,
+    };
+    let next_format = normalize_stream_format(match update {
+        StreamFormatUpdate::Alt(alt) => StreamFormat::new(alt, current.rate),
+        StreamFormatUpdate::Rate(rate) => StreamFormat::new(current.alt, rate),
+    });
+
+    match direction {
+        StreamDirection::Out => formats.out = next_format,
+        StreamDirection::In => formats.in_ = next_format,
+    }
+
+    (formats, next_format)
 }
 
 const fn encode_audio_formats(formats: AudioFormats) -> u32 {
