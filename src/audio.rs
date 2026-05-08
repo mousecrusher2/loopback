@@ -102,6 +102,14 @@ impl StreamFormat {
     pub fn bytes_per_audio_frame(self) -> usize {
         bytes_per_audio_frame(self.alt)
     }
+
+    const fn encode(self) -> u32 {
+        ((self.rate.code() as u32) << 4) | ((self.alt as u32) & 0x0f)
+    }
+
+    const fn decode(bits: u8) -> Self {
+        Self::new(bits & 0x0f, SampleRate::from_code(bits >> 4))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -118,6 +126,17 @@ impl AudioFormats {
     pub fn loopback_format_matches(self) -> bool {
         self.out.alt != 0 && self.out.alt == self.in_.alt && self.out.rate == self.in_.rate
     }
+
+    const fn encode(self) -> u32 {
+        self.out.encode() | (self.in_.encode() << 8)
+    }
+
+    const fn decode(bits: u32) -> Self {
+        Self::new(
+            StreamFormat::decode(bits as u8),
+            StreamFormat::decode((bits >> 8) as u8),
+        )
+    }
 }
 
 pub struct AudioState {
@@ -133,15 +152,13 @@ enum StreamFormatUpdate {
 impl AudioState {
     pub const fn new() -> Self {
         Self {
-            formats: AtomicU32::new(encode_audio_formats(DEFAULT_AUDIO_FORMATS)),
+            formats: AtomicU32::new(DEFAULT_AUDIO_FORMATS.encode()),
         }
     }
 
     pub fn reset(&self) {
-        self.formats.store(
-            encode_audio_formats(AudioFormats::default()),
-            Ordering::Relaxed,
-        );
+        self.formats
+            .store(AudioFormats::default().encode(), Ordering::Relaxed);
     }
 
     pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) -> StreamFormat {
@@ -153,7 +170,7 @@ impl AudioState {
     }
 
     pub fn formats(&self) -> AudioFormats {
-        decode_audio_formats(self.formats.load(Ordering::Relaxed))
+        AudioFormats::decode(self.formats.load(Ordering::Relaxed))
     }
 
     fn update_format(
@@ -165,15 +182,15 @@ impl AudioState {
             self.formats
                 .update(Ordering::Relaxed, Ordering::Relaxed, |current_bits| {
                     let (formats, _) = apply_stream_format_update(
-                        decode_audio_formats(current_bits),
+                        AudioFormats::decode(current_bits),
                         direction,
                         update,
                     );
-                    encode_audio_formats(formats)
+                    formats.encode()
                 });
 
         let (_, stored_format) =
-            apply_stream_format_update(decode_audio_formats(previous_bits), direction, update);
+            apply_stream_format_update(AudioFormats::decode(previous_bits), direction, update);
         stored_format
     }
 }
@@ -212,25 +229,6 @@ fn apply_stream_format_update(
     }
 
     (formats, next_format)
-}
-
-const fn encode_audio_formats(formats: AudioFormats) -> u32 {
-    encode_stream_format(formats.out) | (encode_stream_format(formats.in_) << 8)
-}
-
-const fn encode_stream_format(format: StreamFormat) -> u32 {
-    ((format.rate.code() as u32) << 4) | ((format.alt as u32) & 0x0f)
-}
-
-const fn decode_audio_formats(bits: u32) -> AudioFormats {
-    AudioFormats::new(
-        decode_stream_format(bits as u8),
-        decode_stream_format((bits >> 8) as u8),
-    )
-}
-
-const fn decode_stream_format(bits: u8) -> StreamFormat {
-    StreamFormat::new(bits & 0x0f, SampleRate::from_code(bits >> 4))
 }
 
 pub struct PacketClock {
