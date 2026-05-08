@@ -4,9 +4,16 @@ pub const CHANNEL_COUNT: u8 = 2;
 pub const SAMPLE_WIDTH_16_ALT: u8 = 1;
 pub const SAMPLE_WIDTH_24_ALT: u8 = 2;
 pub const SAMPLE_WIDTH_32_ALT: u8 = 3;
-pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
+pub const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
 pub const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
 pub const SUPPORTED_SAMPLE_RATES_32: [u32; 2] = [44_100, 48_000];
+const SUPPORTED_SAMPLE_RATE_CODES: [SampleRate; 4] = [
+    SampleRate::R44100,
+    SampleRate::R48000,
+    SampleRate::R88200,
+    SampleRate::R96000,
+];
+const SUPPORTED_SAMPLE_RATE_CODES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
 pub const MAX_PACKET_SIZE_16: usize = 97 * CHANNEL_COUNT as usize * 2;
 pub const MAX_PACKET_SIZE_24: usize = 97 * CHANNEL_COUNT as usize * 3;
 pub const MAX_PACKET_SIZE_32: usize = 49 * CHANNEL_COUNT as usize * 4;
@@ -21,14 +28,52 @@ pub enum StreamDirection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SampleRate {
+    R44100,
+    R48000,
+    R88200,
+    R96000,
+}
+
+impl SampleRate {
+    pub const fn hz(self) -> u32 {
+        match self {
+            Self::R44100 => 44_100,
+            Self::R48000 => 48_000,
+            Self::R88200 => 88_200,
+            Self::R96000 => 96_000,
+        }
+    }
+
+    const fn code(self) -> u8 {
+        match self {
+            Self::R44100 => 0,
+            Self::R48000 => 1,
+            Self::R88200 => 2,
+            Self::R96000 => 3,
+        }
+    }
+
+    const fn from_code(code: u8) -> Self {
+        match code & 0x0f {
+            0 => Self::R44100,
+            1 => Self::R48000,
+            2 => Self::R88200,
+            3 => Self::R96000,
+            _ => DEFAULT_SAMPLE_RATE,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamFormat {
     pub alt: u8,
-    pub rate_hz: u32,
+    pub rate: SampleRate,
 }
 
 impl StreamFormat {
-    pub const fn new(alt: u8, rate_hz: u32) -> Self {
-        Self { alt, rate_hz }
+    pub const fn new(alt: u8, rate: SampleRate) -> Self {
+        Self { alt, rate }
     }
 
     pub fn bytes_per_audio_frame(self) -> usize {
@@ -48,7 +93,7 @@ impl AudioFormats {
     }
 
     pub fn loopback_format_matches(self) -> bool {
-        self.out.alt != 0 && self.out.alt == self.in_.alt && self.out.rate_hz == self.in_.rate_hz
+        self.out.alt != 0 && self.out.alt == self.in_.alt && self.out.rate == self.in_.rate
     }
 }
 
@@ -72,12 +117,12 @@ impl AudioState {
 
     pub fn set_alt(&self, direction: StreamDirection, alternate_setting: u8) -> StreamFormat {
         self.update_format(direction, |current| {
-            StreamFormat::new(alternate_setting, current.rate_hz)
+            StreamFormat::new(alternate_setting, current.rate)
         })
     }
 
-    pub fn set_rate_hz(&self, direction: StreamDirection, rate_hz: u32) -> StreamFormat {
-        self.update_format(direction, |current| StreamFormat::new(current.alt, rate_hz))
+    pub fn set_rate(&self, direction: StreamDirection, rate: SampleRate) -> StreamFormat {
+        self.update_format(direction, |current| StreamFormat::new(current.alt, rate))
     }
 
     pub fn formats(&self) -> AudioFormats {
@@ -138,7 +183,12 @@ fn normalize_stream_format(format: StreamFormat) -> StreamFormat {
         0 | SAMPLE_WIDTH_16_ALT | SAMPLE_WIDTH_24_ALT | SAMPLE_WIDTH_32_ALT => format.alt,
         _ => 0,
     };
-    StreamFormat::new(alt, closest_supported_rate_for_alt(alt, format.rate_hz))
+    let rate = if alt == SAMPLE_WIDTH_32_ALT {
+        closest_rate_in(format.rate.hz(), &SUPPORTED_SAMPLE_RATE_CODES_32)
+    } else {
+        format.rate
+    };
+    StreamFormat::new(alt, rate)
 }
 
 const fn encode_audio_formats(formats: AudioFormats) -> u32 {
@@ -146,7 +196,7 @@ const fn encode_audio_formats(formats: AudioFormats) -> u32 {
 }
 
 const fn encode_stream_format(format: StreamFormat) -> u32 {
-    ((rate_code(format.rate_hz) as u32) << 4) | ((format.alt as u32) & 0x0f)
+    ((format.rate.code() as u32) << 4) | ((format.alt as u32) & 0x0f)
 }
 
 const fn decode_audio_formats(bits: u32) -> AudioFormats {
@@ -157,27 +207,7 @@ const fn decode_audio_formats(bits: u32) -> AudioFormats {
 }
 
 const fn decode_stream_format(bits: u8) -> StreamFormat {
-    StreamFormat::new(bits & 0x0f, rate_hz_from_code(bits >> 4))
-}
-
-const fn rate_code(rate_hz: u32) -> u8 {
-    match rate_hz {
-        44_100 => 0,
-        48_000 => 1,
-        88_200 => 2,
-        96_000 => 3,
-        _ => 1,
-    }
-}
-
-const fn rate_hz_from_code(code: u8) -> u32 {
-    match code & 0x0f {
-        0 => 44_100,
-        1 => 48_000,
-        2 => 88_200,
-        3 => 96_000,
-        _ => DEFAULT_SAMPLE_RATE,
-    }
+    StreamFormat::new(bits & 0x0f, SampleRate::from_code(bits >> 4))
 }
 
 pub struct PacketClock {
@@ -224,24 +254,24 @@ pub fn bytes_per_audio_frame(alt: u8) -> usize {
     }
 }
 
-pub fn closest_supported_rate(rate: u32) -> u32 {
-    closest_rate_in(rate, &SUPPORTED_SAMPLE_RATES)
+pub fn closest_supported_rate(rate: u32) -> SampleRate {
+    closest_rate_in(rate, &SUPPORTED_SAMPLE_RATE_CODES)
 }
 
-pub fn closest_supported_rate_for_alt(alt: u8, rate: u32) -> u32 {
+pub fn closest_supported_rate_for_alt(alt: u8, rate: u32) -> SampleRate {
     if alt == SAMPLE_WIDTH_32_ALT {
-        closest_rate_in(rate, &SUPPORTED_SAMPLE_RATES_32)
+        closest_rate_in(rate, &SUPPORTED_SAMPLE_RATE_CODES_32)
     } else {
         closest_supported_rate(rate)
     }
 }
 
-fn closest_rate_in(rate: u32, rates: &[u32]) -> u32 {
+fn closest_rate_in(rate: u32, rates: &[SampleRate]) -> SampleRate {
     let mut closest = rates[0];
-    let mut closest_diff = closest.abs_diff(rate);
+    let mut closest_diff = closest.hz().abs_diff(rate);
 
     for candidate in rates.iter().copied().skip(1) {
-        let diff = candidate.abs_diff(rate);
+        let diff = candidate.hz().abs_diff(rate);
         if diff < closest_diff {
             closest = candidate;
             closest_diff = diff;
@@ -267,41 +297,41 @@ mod tests {
 
     #[test]
     fn unsupported_sample_rates_round_to_nearest_supported_rate() {
-        assert_eq!(closest_supported_rate(44_100), 44_100);
-        assert_eq!(closest_supported_rate(48_000), 48_000);
-        assert_eq!(closest_supported_rate(88_200), 88_200);
-        assert_eq!(closest_supported_rate(96_000), 96_000);
-        assert_eq!(closest_supported_rate(45_000), 44_100);
-        assert_eq!(closest_supported_rate(50_000), 48_000);
-        assert_eq!(closest_supported_rate(90_000), 88_200);
-        assert_eq!(closest_supported_rate(95_000), 96_000);
+        assert_eq!(closest_supported_rate(44_100), SampleRate::R44100);
+        assert_eq!(closest_supported_rate(48_000), SampleRate::R48000);
+        assert_eq!(closest_supported_rate(88_200), SampleRate::R88200);
+        assert_eq!(closest_supported_rate(96_000), SampleRate::R96000);
+        assert_eq!(closest_supported_rate(45_000), SampleRate::R44100);
+        assert_eq!(closest_supported_rate(50_000), SampleRate::R48000);
+        assert_eq!(closest_supported_rate(90_000), SampleRate::R88200);
+        assert_eq!(closest_supported_rate(95_000), SampleRate::R96000);
     }
 
     #[test]
     fn unsupported_32bit_sample_rates_round_to_44k1_or_48k() {
         assert_eq!(
             closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 44_100),
-            44_100
+            SampleRate::R44100
         );
         assert_eq!(
             closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 48_000),
-            48_000
+            SampleRate::R48000
         );
         assert_eq!(
             closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 45_000),
-            44_100
+            SampleRate::R44100
         );
         assert_eq!(
             closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 50_000),
-            48_000
+            SampleRate::R48000
         );
         assert_eq!(
             closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 88_200),
-            48_000
+            SampleRate::R48000
         );
         assert_eq!(
             closest_supported_rate_for_alt(SAMPLE_WIDTH_32_ALT, 96_000),
-            48_000
+            SampleRate::R48000
         );
     }
 
@@ -390,13 +420,13 @@ mod tests {
         assert!(!state.formats().loopback_format_matches());
 
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_16_ALT);
-        state.set_rate_hz(StreamDirection::In, 44_100);
+        state.set_rate(StreamDirection::In, SampleRate::R44100);
         assert!(!state.formats().loopback_format_matches());
 
         state.set_alt(StreamDirection::Out, SAMPLE_WIDTH_32_ALT);
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
-        state.set_rate_hz(StreamDirection::Out, 48_000);
-        state.set_rate_hz(StreamDirection::In, 48_000);
+        state.set_rate(StreamDirection::Out, SampleRate::R48000);
+        state.set_rate(StreamDirection::In, SampleRate::R48000);
         assert!(state.formats().loopback_format_matches());
     }
 
@@ -406,18 +436,18 @@ mod tests {
 
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_24_ALT);
         assert_eq!(
-            state.set_rate_hz(StreamDirection::In, 96_000).rate_hz,
-            96_000
+            state.set_rate(StreamDirection::In, SampleRate::R96000).rate,
+            SampleRate::R96000
         );
 
         let stored = state.set_alt(StreamDirection::In, SAMPLE_WIDTH_32_ALT);
         let format = state.formats().in_;
 
-        assert_eq!(stored.rate_hz, 48_000);
+        assert_eq!(stored.rate, SampleRate::R48000);
         assert_eq!(format.alt, SAMPLE_WIDTH_32_ALT);
-        assert_eq!(format.rate_hz, 48_000);
+        assert_eq!(format.rate, SampleRate::R48000);
         assert!(
-            PacketClock::new().next_len(format.rate_hz, format.bytes_per_audio_frame())
+            PacketClock::new().next_len(format.rate.hz(), format.bytes_per_audio_frame())
                 <= MAX_PACKET_SIZE
         );
     }
@@ -427,14 +457,20 @@ mod tests {
         let state = AudioState::new();
 
         state.set_alt(StreamDirection::Out, SAMPLE_WIDTH_24_ALT);
-        state.set_rate_hz(StreamDirection::Out, 88_200);
+        state.set_rate(StreamDirection::Out, SampleRate::R88200);
         state.set_alt(StreamDirection::In, SAMPLE_WIDTH_24_ALT);
-        state.set_rate_hz(StreamDirection::In, 88_200);
+        state.set_rate(StreamDirection::In, SampleRate::R88200);
 
         let formats = state.formats();
 
-        assert_eq!(formats.out, StreamFormat::new(SAMPLE_WIDTH_24_ALT, 88_200));
-        assert_eq!(formats.in_, StreamFormat::new(SAMPLE_WIDTH_24_ALT, 88_200));
+        assert_eq!(
+            formats.out,
+            StreamFormat::new(SAMPLE_WIDTH_24_ALT, SampleRate::R88200)
+        );
+        assert_eq!(
+            formats.in_,
+            StreamFormat::new(SAMPLE_WIDTH_24_ALT, SampleRate::R88200)
+        );
         assert!(formats.loopback_format_matches());
     }
 }

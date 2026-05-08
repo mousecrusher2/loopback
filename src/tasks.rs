@@ -99,10 +99,10 @@ pub async fn in_task<'d, D: Driver<'d>>(
                     usize::from(len)
                 } else {
                     diag::add_in_queue_empty();
-                    clock.next_len(in_format.rate_hz, bytes_per_audio_frame)
+                    clock.next_len(in_format.rate.hz(), bytes_per_audio_frame)
                 }
             } else {
-                clock.next_len(in_format.rate_hz, bytes_per_audio_frame)
+                clock.next_len(in_format.rate.hz(), bytes_per_audio_frame)
             };
             packet[..packet_len].fill(0);
             diag::add_in_packet(packet_len);

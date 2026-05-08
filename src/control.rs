@@ -91,11 +91,11 @@ impl embassy_usb::Handler for AudioControlHandler {
             match direction {
                 StreamDirection::Out => {
                     diag::set_out_alt(format.alt);
-                    diag::set_out_rate(format.rate_hz);
+                    diag::set_out_rate(format.rate.hz());
                 }
                 StreamDirection::In => {
                     diag::set_in_alt(format.alt);
-                    diag::set_in_rate(format.rate_hz);
+                    diag::set_in_rate(format.rate.hz());
                 }
             }
             self.pipe.clear();
@@ -123,10 +123,10 @@ impl embassy_usb::Handler for AudioControlHandler {
 
         let requested = u32::from(data[0]) | (u32::from(data[1]) << 8) | (u32::from(data[2]) << 16);
         let rate = closest_supported_rate_for_alt(alt, requested);
-        let format = self.state.set_rate_hz(direction, rate);
+        let format = self.state.set_rate(direction, rate);
         match direction {
-            StreamDirection::Out => diag::set_out_rate(format.rate_hz),
-            StreamDirection::In => diag::set_in_rate(format.rate_hz),
+            StreamDirection::Out => diag::set_out_rate(format.rate.hz()),
+            StreamDirection::In => diag::set_in_rate(format.rate.hz()),
         }
         self.pipe.clear();
         self.packet_lens.clear();
@@ -148,12 +148,12 @@ impl embassy_usb::Handler for AudioControlHandler {
 
         let formats = self.state.formats();
         let current_rate = match direction {
-            StreamDirection::Out => formats.out.rate_hz,
-            StreamDirection::In => formats.in_.rate_hz,
+            StreamDirection::Out => formats.out.rate,
+            StreamDirection::In => formats.in_.rate,
         };
 
         let value = match req.request {
-            GET_CUR => closest_supported_rate_for_alt(alt, current_rate),
+            GET_CUR => closest_supported_rate_for_alt(alt, current_rate.hz()).hz(),
             GET_MIN => 44_100,
             GET_MAX if alt == SAMPLE_WIDTH_32_ALT => 48_000,
             GET_MAX => 96_000,
