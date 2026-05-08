@@ -7,6 +7,14 @@ pub const SAMPLE_WIDTH_32_ALT: u8 = 3;
 pub const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
 pub const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
 pub const SUPPORTED_SAMPLE_RATES_32: [u32; 2] = [44_100, 48_000];
+const DEFAULT_STREAM_FORMAT: StreamFormat = StreamFormat {
+    alt: 0,
+    rate: DEFAULT_SAMPLE_RATE,
+};
+const DEFAULT_AUDIO_FORMATS: AudioFormats = AudioFormats {
+    out: DEFAULT_STREAM_FORMAT,
+    in_: DEFAULT_STREAM_FORMAT,
+};
 pub const MAX_PACKET_SIZE_16: usize = 97 * CHANNEL_COUNT as usize * 2;
 pub const MAX_PACKET_SIZE_24: usize = 97 * CHANNEL_COUNT as usize * 3;
 pub const MAX_PACKET_SIZE_32: usize = 49 * CHANNEL_COUNT as usize * 4;
@@ -21,9 +29,10 @@ pub enum StreamDirection {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SampleRate {
     R44100 = 0,
+    #[default]
     R48000 = 1,
     R88200 = 2,
     R96000 = 3,
@@ -79,7 +88,7 @@ impl SampleRate {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StreamFormat {
     pub alt: u8,
     pub rate: SampleRate,
@@ -95,7 +104,7 @@ impl StreamFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AudioFormats {
     pub out: StreamFormat,
     pub in_: StreamFormat,
@@ -124,13 +133,13 @@ enum StreamFormatUpdate {
 impl AudioState {
     pub const fn new() -> Self {
         Self {
-            formats: AtomicU32::new(encode_audio_formats(default_audio_formats())),
+            formats: AtomicU32::new(encode_audio_formats(DEFAULT_AUDIO_FORMATS)),
         }
     }
 
     pub fn reset(&self) {
         self.formats.store(
-            encode_audio_formats(default_audio_formats()),
+            encode_audio_formats(AudioFormats::default()),
             Ordering::Relaxed,
         );
     }
@@ -173,13 +182,6 @@ impl Default for AudioState {
     fn default() -> Self {
         Self::new()
     }
-}
-
-const fn default_audio_formats() -> AudioFormats {
-    AudioFormats::new(
-        StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
-        StreamFormat::new(0, DEFAULT_SAMPLE_RATE),
-    )
 }
 
 fn normalize_stream_format(format: StreamFormat) -> StreamFormat {
@@ -287,6 +289,17 @@ mod tests {
         assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_24_ALT), 6);
         assert_eq!(bytes_per_audio_frame(SAMPLE_WIDTH_32_ALT), 8);
         assert_eq!(bytes_per_audio_frame(4), 0);
+    }
+
+    #[test]
+    fn default_formats_are_inactive_48k_streams() {
+        assert_eq!(
+            AudioFormats::default(),
+            AudioFormats::new(
+                StreamFormat::new(0, SampleRate::R48000),
+                StreamFormat::new(0, SampleRate::R48000)
+            )
+        );
     }
 
     #[test]
