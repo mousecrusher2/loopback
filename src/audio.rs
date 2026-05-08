@@ -27,22 +27,18 @@ pub enum StreamDirection {
     In,
 }
 
+#[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SampleRate {
-    R44100,
-    R48000,
-    R88200,
-    R96000,
+    R44100 = 44_100,
+    R48000 = 48_000,
+    R88200 = 88_200,
+    R96000 = 96_000,
 }
 
 impl SampleRate {
     pub const fn hz(self) -> u32 {
-        match self {
-            Self::R44100 => 44_100,
-            Self::R48000 => 48_000,
-            Self::R88200 => 88_200,
-            Self::R96000 => 96_000,
-        }
+        self as u32
     }
 
     const fn code(self) -> u8 {
