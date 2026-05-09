@@ -16,7 +16,7 @@ use crate::dump::write_dumps;
 use crate::pattern::generate_pattern;
 use crate::types::{
     AudioConfig, CHANNEL_MASK_STEREO, CHANNELS, CaptureMode, CheckReport, DeviceSelector,
-    OpenedStream, StreamStats, StreamTiming, frames_from_ms, polling_sleep,
+    OpenedStream, StreamStats, StreamTiming, polling_sleep,
 };
 
 const STREAM_START_TIMEOUT: Duration = Duration::from_secs(15);
@@ -144,7 +144,8 @@ fn render_loop(
         period_hns: opened.period_hns,
     };
     let sleep = polling_sleep(opened.period_hns);
-    let tail_frames = frames_from_ms(config.rate, config.tail_ms) + opened.buffer_frames as usize;
+    let tail_frames =
+        config.sample_rate.frames_from_ms(config.tail_ms) + opened.buffer_frames as usize;
     let total_frames = config.payload_frames() + tail_frames;
     let mut frame_offset = 0usize;
 
@@ -240,7 +241,9 @@ fn capture_loop(
     };
     let mut captured = Vec::with_capacity(
         (config.payload_frames()
-            + frames_from_ms(config.rate, config.pre_roll_ms + config.tail_ms + 1000))
+            + config
+                .sample_rate
+                .frames_from_ms(config.pre_roll_ms + config.tail_ms + 1000))
             * config.bytes_per_frame(),
     );
     let mut scratch = vec![0u8; opened.buffer_frames as usize * opened.block_align];
@@ -299,10 +302,10 @@ fn open_stream(
         .get_iaudioclient()
         .with_context(|| format!("activate IAudioClient for {direction:?} endpoint"))?;
     let requested = WaveFormat::new(
-        config.bits as usize,
-        config.bits as usize,
+        config.bits_per_sample() as usize,
+        config.bits_per_sample() as usize,
         &SampleType::Int,
-        config.rate as usize,
+        config.rate_hz() as usize,
         CHANNELS,
         Some(CHANNEL_MASK_STEREO),
     );
@@ -317,7 +320,8 @@ fn open_stream(
             .with_context(|| {
                 format!(
                     "{direction:?} endpoint does not support exact exclusive {} Hz {}-bit stereo",
-                    config.rate, config.bits
+                    config.rate_hz(),
+                    config.bits_per_sample()
                 )
             })?,
         CaptureMode::Shared => match client
@@ -325,14 +329,15 @@ fn open_stream(
             .with_context(|| {
                 format!(
                     "{direction:?} endpoint does not support shared {} Hz {}-bit stereo",
-                    config.rate, config.bits
+                    config.rate_hz(),
+                    config.bits_per_sample()
                 )
             })? {
             None => requested,
             Some(similar) => bail!(
                 "{direction:?} shared mode would use a different format: requested {} Hz {}-bit stereo, nearest is {} Hz {} valid / {} container bits {:?}",
-                config.rate,
-                config.bits,
+                config.rate_hz(),
+                config.bits_per_sample(),
                 similar.get_samplespersec(),
                 similar.get_validbitspersample(),
                 similar.get_bitspersample(),
@@ -361,7 +366,10 @@ fn open_stream(
         .with_context(|| {
             format!(
                 "initialize {direction:?} {capture_mode:?} {:?} stream: {} Hz {}-bit, period_hns={}",
-                config.timing, config.rate, config.bits, period_hns
+                config.timing,
+                config.rate_hz(),
+                config.bits_per_sample(),
+                period_hns
             )
         })?;
     let event_handle = if config.timing == StreamTiming::Events {
@@ -398,8 +406,9 @@ fn stream_mode(
                 .calculate_aligned_period_near(desired_period_hns, None, format)
                 .unwrap_or_else(|_| {
                     calculate_period_100ns(
-                        ((config.rate as f64 * config.period_ms / 1000.0).round() as i64).max(1),
-                        config.rate as i64,
+                        ((config.rate_hz() as f64 * config.period_ms / 1000.0).round() as i64)
+                            .max(1),
+                        config.rate_hz() as i64,
                     )
                 });
             let mode = match config.timing {
@@ -440,10 +449,10 @@ fn verify_exact_format(
     config: &AudioConfig,
     direction: Direction,
 ) -> Result<()> {
-    if format.get_samplespersec() != config.rate {
+    if format.get_samplespersec() != config.rate_hz() {
         bail!(
             "{direction:?} accepted a different sample rate: requested {}, got {}",
-            config.rate,
+            config.rate_hz(),
             format.get_samplespersec()
         );
     }
@@ -454,18 +463,18 @@ fn verify_exact_format(
             format.get_nchannels()
         );
     }
-    if format.get_bitspersample() != config.bits {
+    if format.get_bitspersample() != config.bits_per_sample() {
         bail!(
             "{direction:?} accepted a different container width: requested {}, got {}",
-            config.bits,
+            config.bits_per_sample(),
             format.get_bitspersample()
         );
     }
     let valid_bits = format.get_validbitspersample();
-    if valid_bits != 0 && valid_bits != config.bits {
+    if valid_bits != 0 && valid_bits != config.bits_per_sample() {
         bail!(
             "{direction:?} accepted a different valid width: requested {}, got {}",
-            config.bits,
+            config.bits_per_sample(),
             valid_bits
         );
     }

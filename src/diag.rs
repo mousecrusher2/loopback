@@ -1,6 +1,10 @@
+use crate::audio::{AudioStreamingAlternateSetting, SampleRate};
+
 #[cfg(feature = "diagnostics")]
 mod enabled {
     use core::sync::atomic::{AtomicU32, Ordering};
+
+    use super::{AudioStreamingAlternateSetting, SampleRate};
 
     // SAFETY: The exported diagnostics symbols below all use unique
     // project-prefixed names and are defined exactly once in the firmware.
@@ -59,20 +63,20 @@ mod enabled {
         UAC_DIAG_IN_UNDERRUN_BYTES.fetch_add(len as u32, Ordering::Relaxed);
     }
 
-    pub fn set_out_alt(alt: u8) {
-        UAC_DIAG_OUT_ALT.store(u32::from(alt), Ordering::Relaxed);
+    pub fn set_out_alt(alt: AudioStreamingAlternateSetting) {
+        UAC_DIAG_OUT_ALT.store(u32::from(alt.number()), Ordering::Relaxed);
     }
 
-    pub fn set_in_alt(alt: u8) {
-        UAC_DIAG_IN_ALT.store(u32::from(alt), Ordering::Relaxed);
+    pub fn set_in_alt(alt: AudioStreamingAlternateSetting) {
+        UAC_DIAG_IN_ALT.store(u32::from(alt.number()), Ordering::Relaxed);
     }
 
-    pub fn set_out_rate(rate: u32) {
-        UAC_DIAG_OUT_RATE.store(rate, Ordering::Relaxed);
+    pub fn set_out_rate(rate: Option<SampleRate>) {
+        UAC_DIAG_OUT_RATE.store(rate.map_or(0, SampleRate::hz), Ordering::Relaxed);
     }
 
-    pub fn set_in_rate(rate: u32) {
-        UAC_DIAG_IN_RATE.store(rate, Ordering::Relaxed);
+    pub fn set_in_rate(rate: Option<SampleRate>) {
+        UAC_DIAG_IN_RATE.store(rate.map_or(0, SampleRate::hz), Ordering::Relaxed);
     }
 }
 
@@ -98,13 +102,13 @@ pub fn add_in_queue_empty() {}
 pub fn add_in_underrun(_len: usize) {}
 
 #[cfg(not(feature = "diagnostics"))]
-pub fn set_out_alt(_alt: u8) {}
+pub fn set_out_alt(_alt: AudioStreamingAlternateSetting) {}
 
 #[cfg(not(feature = "diagnostics"))]
-pub fn set_in_alt(_alt: u8) {}
+pub fn set_in_alt(_alt: AudioStreamingAlternateSetting) {}
 
 #[cfg(not(feature = "diagnostics"))]
-pub fn set_out_rate(_rate: u32) {}
+pub fn set_out_rate(_rate: Option<SampleRate>) {}
 
 #[cfg(not(feature = "diagnostics"))]
-pub fn set_in_rate(_rate: u32) {}
+pub fn set_in_rate(_rate: Option<SampleRate>) {}

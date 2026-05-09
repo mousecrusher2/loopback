@@ -2,8 +2,13 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const CHANNEL_COUNT: u8 = 2;
 pub const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
-pub const SUPPORTED_SAMPLE_RATES: [u32; 4] = [44_100, 48_000, 88_200, 96_000];
-pub const SUPPORTED_SAMPLE_RATES_32: [u32; 2] = [44_100, 48_000];
+pub const SUPPORTED_SAMPLE_RATES: [SampleRate; 4] = [
+    SampleRate::R44100,
+    SampleRate::R48000,
+    SampleRate::R88200,
+    SampleRate::R96000,
+];
+pub const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
 const DEFAULT_STREAM_FORMAT: StreamFormat = StreamFormat {
     alternate_setting: AudioStreamingAlternateSetting::Inactive,
     rate: DEFAULT_SAMPLE_RATE,
@@ -61,8 +66,8 @@ impl AudioStreamingAlternateSetting {
 
     pub const fn supports_sample_rate(self, rate: SampleRate) -> bool {
         match self {
+            Self::Inactive | Self::Pcm16 | Self::Pcm24 => true,
             Self::Pcm32 => matches!(rate, SampleRate::R44100 | SampleRate::R48000),
-            _ => true,
         }
     }
 
@@ -293,7 +298,7 @@ fn apply_stream_format_update(
 }
 
 pub struct PacketClock {
-    rate_hz: u32,
+    rate: SampleRate,
     bytes_per_audio_frame: usize,
     accumulator: u32,
 }
@@ -301,19 +306,20 @@ pub struct PacketClock {
 impl PacketClock {
     pub const fn new() -> Self {
         Self {
-            rate_hz: 0,
+            rate: DEFAULT_SAMPLE_RATE,
             bytes_per_audio_frame: 0,
             accumulator: 0,
         }
     }
 
-    pub fn next_len(&mut self, rate_hz: u32, bytes_per_audio_frame: usize) -> usize {
-        if self.rate_hz != rate_hz || self.bytes_per_audio_frame != bytes_per_audio_frame {
-            self.rate_hz = rate_hz;
+    pub fn next_len(&mut self, rate: SampleRate, bytes_per_audio_frame: usize) -> usize {
+        if self.rate != rate || self.bytes_per_audio_frame != bytes_per_audio_frame {
+            self.rate = rate;
             self.bytes_per_audio_frame = bytes_per_audio_frame;
             self.accumulator = 0;
         }
 
+        let rate_hz = rate.hz();
         self.accumulator += rate_hz;
         let audio_frames = self.accumulator / 1_000;
         self.accumulator %= 1_000;
@@ -395,7 +401,7 @@ mod tests {
 
         for index in 0..10 {
             let len = clock.next_len(
-                44_100,
+                SampleRate::R44100,
                 AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame(),
             );
             total += len;
@@ -416,7 +422,7 @@ mod tests {
 
         for index in 0..5 {
             let len = clock.next_len(
-                88_200,
+                SampleRate::R88200,
                 AudioStreamingAlternateSetting::Pcm24.bytes_per_audio_frame(),
             );
             total += len;
@@ -437,7 +443,7 @@ mod tests {
 
         for index in 0..10 {
             let len = clock.next_len(
-                44_100,
+                SampleRate::R44100,
                 AudioStreamingAlternateSetting::Pcm32.bytes_per_audio_frame(),
             );
             total += len;
@@ -457,21 +463,21 @@ mod tests {
 
         assert_eq!(
             clock.next_len(
-                44_100,
+                SampleRate::R44100,
                 AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame()
             ),
             44 * 4
         );
         assert_eq!(
             clock.next_len(
-                48_000,
+                SampleRate::R48000,
                 AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame()
             ),
             48 * 4
         );
         assert_eq!(
             clock.next_len(
-                48_000,
+                SampleRate::R48000,
                 AudioStreamingAlternateSetting::Pcm24.bytes_per_audio_frame()
             ),
             48 * 6
@@ -543,7 +549,7 @@ mod tests {
         );
         assert_eq!(format.rate, SampleRate::R48000);
         assert!(
-            PacketClock::new().next_len(format.rate.hz(), format.bytes_per_audio_frame())
+            PacketClock::new().next_len(format.rate, format.bytes_per_audio_frame())
                 <= MAX_PACKET_SIZE
         );
     }

@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::types::{DEFAULT_BUFFER_PERIODS, DEFAULT_DEVICE_QUERY, DEFAULT_PERIOD_MS};
+use crate::types::{
+    DEFAULT_BUFFER_PERIODS, DEFAULT_DEVICE_QUERY, DEFAULT_PERIOD_MS, SampleRate, SampleWidth,
+};
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum TimingArg {
@@ -66,10 +68,10 @@ pub struct ProbeArgs {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct TestArgs {
-    #[arg(long, default_value_t = 48_000)]
+    #[arg(long, default_value_t = 48_000, value_parser = parse_sample_rate)]
     pub rate: u32,
 
-    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u16).range(16..=32))]
+    #[arg(long, default_value_t = 16, value_parser = parse_sample_width)]
     pub bits: u16,
 
     #[arg(long, default_value_t = 3.0)]
@@ -118,6 +120,24 @@ pub struct TestArgs {
     /// Save expected/captured raw data, WAVs, and report.json under this directory.
     #[arg(long)]
     pub dump_dir: Option<PathBuf>,
+}
+
+fn parse_sample_rate(value: &str) -> Result<u32, String> {
+    let rate = value
+        .parse::<u32>()
+        .map_err(|_| "rate must be an integer".to_owned())?;
+    SampleRate::from_hz(rate)
+        .map(|sample_rate| sample_rate.hz())
+        .map_err(|err| err.to_string())
+}
+
+fn parse_sample_width(value: &str) -> Result<u16, String> {
+    let bits = value
+        .parse::<u16>()
+        .map_err(|_| "bits must be an integer".to_owned())?;
+    SampleWidth::from_bits(bits)
+        .map(|sample_width| sample_width.bits())
+        .map_err(|err| err.to_string())
 }
 
 #[derive(clap::Args, Clone, Debug)]

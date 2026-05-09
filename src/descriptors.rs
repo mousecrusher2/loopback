@@ -5,7 +5,7 @@ use embassy_usb::{Builder, InterfaceAltBuilder};
 
 use crate::audio::{
     CHANNEL_COUNT, MAX_PACKET_SIZE_16, MAX_PACKET_SIZE_24, MAX_PACKET_SIZE_32,
-    SUPPORTED_SAMPLE_RATES, SUPPORTED_SAMPLE_RATES_32,
+    SUPPORTED_SAMPLE_RATES, SUPPORTED_SAMPLE_RATES_32, SampleRate,
 };
 
 const USB_CLASS_AUDIO: u8 = 0x01;
@@ -404,7 +404,7 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
     terminal_link: u8,
     subframe_size: u8,
     bit_resolution: u8,
-    sample_rates: &[u32],
+    sample_rates: &[SampleRate],
 ) {
     alt.descriptor(
         CS_INTERFACE,
@@ -426,9 +426,10 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
     format_type[5] = sample_rates.len() as u8;
     let mut offset = 6;
     for rate in sample_rates {
-        format_type[offset] = *rate as u8;
-        format_type[offset + 1] = (*rate >> 8) as u8;
-        format_type[offset + 2] = (*rate >> 16) as u8;
+        let rate_hz = rate.hz();
+        format_type[offset] = rate_hz as u8;
+        format_type[offset + 1] = (rate_hz >> 8) as u8;
+        format_type[offset + 2] = (rate_hz >> 16) as u8;
         offset += 3;
     }
     alt.descriptor(CS_INTERFACE, &format_type[..offset]);

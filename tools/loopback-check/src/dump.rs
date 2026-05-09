@@ -2,9 +2,9 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
-use crate::types::{AudioConfig, CHANNELS, CheckReport};
+use crate::types::{AudioConfig, CHANNELS, CheckReport, SampleWidth};
 
 pub fn write_dumps(
     dir: &Path,
@@ -27,30 +27,29 @@ pub fn write_dumps(
 fn write_wav(path: &Path, config: &AudioConfig, bytes: &[u8]) -> Result<()> {
     let spec = hound::WavSpec {
         channels: CHANNELS as u16,
-        sample_rate: config.rate,
-        bits_per_sample: config.bits,
+        sample_rate: config.rate_hz(),
+        bits_per_sample: config.bits_per_sample(),
         sample_format: hound::SampleFormat::Int,
     };
     let mut writer = hound::WavWriter::create(path, spec)?;
-    match config.bits {
-        16 => {
+    match config.sample_width {
+        SampleWidth::Bits16 => {
             for sample in bytes.chunks_exact(2) {
                 writer.write_sample(i16::from_le_bytes([sample[0], sample[1]]))?;
             }
         }
-        24 => {
+        SampleWidth::Bits24 => {
             for sample in bytes.chunks_exact(3) {
                 writer.write_sample(read_i24(sample))?;
             }
         }
-        32 => {
+        SampleWidth::Bits32 => {
             for sample in bytes.chunks_exact(4) {
                 writer.write_sample(i32::from_le_bytes([
                     sample[0], sample[1], sample[2], sample[3],
                 ]))?;
             }
         }
-        _ => bail!("unsupported WAV bit depth {}", config.bits),
     }
     writer.finalize()?;
     Ok(())

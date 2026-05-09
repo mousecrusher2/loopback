@@ -9,7 +9,7 @@ pub fn analyze(
 ) -> CheckReport {
     let sync_len = expected
         .len()
-        .min(config.bytes_per_frame() * (config.rate as usize / 10).max(256));
+        .min(config.bytes_per_frame() * (config.rate_hz() as usize / 10).max(256));
     let sync_found_at = find_subslice(captured, &expected[..sync_len])
         .or_else(|| find_short_frame_aligned_sync(config, expected, captured));
     let (compared_bytes, mismatched_bytes, missing_bytes, first_mismatch) =
@@ -26,14 +26,14 @@ pub fn analyze(
         && missing_bytes == 0;
 
     CheckReport {
-        rate: config.rate,
-        bits: config.bits,
+        rate: config.rate_hz(),
+        bits: config.bits_per_sample(),
         seconds: config.seconds,
         capture_mode: config.capture_mode,
         exact,
         sync_found: sync_found_at.is_some(),
         latency_frames,
-        latency_ms: latency_frames.map(|frames| frames as f64 * 1000.0 / config.rate as f64),
+        latency_ms: latency_frames.map(|frames| frames as f64 * 1000.0 / config.rate_hz() as f64),
         compared_bytes,
         expected_bytes: expected.len(),
         captured_bytes: captured.len(),
@@ -56,7 +56,7 @@ fn find_short_frame_aligned_sync(
         return None;
     }
 
-    let window_frames = (config.rate as usize / 50).max(64);
+    let window_frames = (config.rate_hz() as usize / 50).max(64);
     let window_len = expected.len().min(window_frames * bytes_per_frame);
     if captured.len() < window_len {
         return None;
@@ -159,20 +159,25 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::pattern::generate_pattern;
-    use crate::types::{CaptureMode, StreamStats, StreamTiming};
+    use crate::types::{
+        AudioRunConfig, CaptureMode, SampleRate, SampleWidth, StreamStats, StreamTiming,
+    };
 
     fn config() -> AudioConfig {
-        AudioConfig {
-            rate: 48_000,
-            bits: 24,
-            seconds: 1.0,
-            timing: StreamTiming::Polling,
-            capture_mode: CaptureMode::Exclusive,
-            period_ms: 10.0,
-            buffer_periods: 4,
-            pre_roll_ms: 250,
-            tail_ms: 500,
-        }
+        AudioConfig::new(
+            SampleRate::R48000,
+            SampleWidth::Bits24,
+            AudioRunConfig {
+                seconds: 1.0,
+                timing: StreamTiming::Polling,
+                capture_mode: CaptureMode::Exclusive,
+                period_ms: 10.0,
+                buffer_periods: 4,
+                pre_roll_ms: 250,
+                tail_ms: 500,
+            },
+        )
+        .unwrap()
     }
 
     fn stats() -> StreamStats {

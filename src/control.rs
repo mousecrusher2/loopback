@@ -77,10 +77,10 @@ impl AudioControlHandler {
 impl embassy_usb::Handler for AudioControlHandler {
     fn reset(&mut self) {
         self.state.reset();
-        diag::set_out_alt(0);
-        diag::set_in_alt(0);
-        diag::set_out_rate(0);
-        diag::set_in_rate(0);
+        diag::set_out_alt(AudioStreamingAlternateSetting::Inactive);
+        diag::set_in_alt(AudioStreamingAlternateSetting::Inactive);
+        diag::set_out_rate(None);
+        diag::set_in_rate(None);
         self.pipe.clear();
         self.packet_lens.clear();
     }
@@ -100,12 +100,12 @@ impl embassy_usb::Handler for AudioControlHandler {
                 .set_alternate_setting(direction, alternate_setting);
             match direction {
                 StreamDirection::Out => {
-                    diag::set_out_alt(format.alternate_setting.number());
-                    diag::set_out_rate(format.rate.hz());
+                    diag::set_out_alt(format.alternate_setting);
+                    diag::set_out_rate(Some(format.rate));
                 }
                 StreamDirection::In => {
-                    diag::set_in_alt(format.alternate_setting.number());
-                    diag::set_in_rate(format.rate.hz());
+                    diag::set_in_alt(format.alternate_setting);
+                    diag::set_in_rate(Some(format.rate));
                 }
             }
             self.pipe.clear();
@@ -143,8 +143,8 @@ impl embassy_usb::Handler for AudioControlHandler {
             return Some(OutResponse::Rejected);
         };
         match direction {
-            StreamDirection::Out => diag::set_out_rate(format.rate.hz()),
-            StreamDirection::In => diag::set_in_rate(format.rate.hz()),
+            StreamDirection::Out => diag::set_out_rate(Some(format.rate)),
+            StreamDirection::In => diag::set_in_rate(Some(format.rate)),
         }
         self.pipe.clear();
         self.packet_lens.clear();
@@ -172,9 +172,9 @@ impl embassy_usb::Handler for AudioControlHandler {
 
         let value = match req.request {
             GET_CUR => alt.sample_rate_or_default(current_rate).hz(),
-            GET_MIN => 44_100,
-            GET_MAX if alt == AudioStreamingAlternateSetting::Pcm32 => 48_000,
-            GET_MAX => 96_000,
+            GET_MIN => SampleRate::R44100.hz(),
+            GET_MAX if alt == AudioStreamingAlternateSetting::Pcm32 => SampleRate::R48000.hz(),
+            GET_MAX => SampleRate::R96000.hz(),
             GET_RES => 1,
             _ => return Some(InResponse::Rejected),
         };

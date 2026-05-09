@@ -4,7 +4,7 @@ use std::slice;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use wasapi::{Direction, WaveFormat};
 use windows::Win32::Media::Audio::{
     IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, PKEY_AudioEngine_DeviceFormat, WAVEFORMATEX,
@@ -18,7 +18,9 @@ use windows::core::imp::CanInto;
 use windows::core::{GUID, HRESULT, HSTRING, IUnknown, IUnknown_Vtbl, Interface, PCWSTR};
 
 use crate::devices::select_device;
-use crate::types::{AudioConfig, CaptureMode, DeviceSelector, SharedFormatMode};
+use crate::types::{
+    AudioConfig, CaptureMode, DeviceSelector, SampleRate, SampleWidth, SharedFormatMode,
+};
 
 const CHANNELS: u16 = 2;
 const CHANNEL_MASK_STEREO: u32 = 0x3;
@@ -62,12 +64,14 @@ pub fn prepare_capture_shared_format(
     }
     let original_blob = get_device_format_blob(&endpoint_id)
         .with_context(|| format!("read capture shared-mode format from {endpoint_id}"))?;
-    let target_blob = make_waveformat_extensible_blob(config.rate, config.bits);
+    let target_blob = make_waveformat_extensible_blob(config.sample_rate, config.sample_width);
 
     set_device_format_blob(&endpoint_id, &target_blob).with_context(|| {
         format!(
             "set capture shared-mode format to {} Hz {}-bit on {}",
-            config.rate, config.bits, endpoint_id
+            config.rate_hz(),
+            config.bits_per_sample(),
+            endpoint_id
         )
     })?;
     wait_for_audio_service_reconfigure();
@@ -111,13 +115,13 @@ fn verify_device_format(selector: &DeviceSelector, config: &AudioConfig) -> Resu
     }
     let format = match format {
         Some(format) => format,
-        None => return Err(last_error.expect("format retry records the last error")),
+        None => return Err(last_error.unwrap_or_else(|| anyhow!("could not read device format"))),
     };
     if !device_format_matches_config(&format, config) {
         bail!(
             "capture shared-mode format did not switch to requested format: requested {} Hz {}-bit stereo, got {} Hz {} valid / {} container bits, {} channels",
-            config.rate,
-            config.bits,
+            config.rate_hz(),
+            config.bits_per_sample(),
             format.get_samplespersec(),
             format.get_validbitspersample(),
             format.get_bitspersample(),
@@ -129,10 +133,10 @@ fn verify_device_format(selector: &DeviceSelector, config: &AudioConfig) -> Resu
 
 fn device_format_matches_config(format: &WaveFormat, config: &AudioConfig) -> bool {
     let valid_bits = format.get_validbitspersample();
-    format.get_samplespersec() == config.rate
+    format.get_samplespersec() == config.rate_hz()
         && format.get_nchannels() == CHANNELS
-        && format.get_bitspersample() == config.bits
-        && (valid_bits == 0 || valid_bits == config.bits)
+        && format.get_bitspersample() == config.bits_per_sample()
+        && (valid_bits == 0 || valid_bits == config.bits_per_sample())
 }
 
 fn get_device_format_blob(endpoint_id: &str) -> Result<Vec<u8>> {
@@ -305,13 +309,15 @@ fn make_blob_propvariant(blob: &[u8]) -> PROPVARIANT {
     }
 }
 
-fn make_waveformat_extensible_blob(rate: u32, bits: u16) -> Vec<u8> {
+fn make_waveformat_extensible_blob(rate: SampleRate, width: SampleWidth) -> Vec<u8> {
+    let rate_hz = rate.hz();
+    let bits = width.bits();
     let block_align = CHANNELS * (bits / 8);
-    let avg_bytes_per_sec = rate * u32::from(block_align);
+    let avg_bytes_per_sec = rate_hz * u32::from(block_align);
     let mut blob = Vec::with_capacity(40);
     push_u16(&mut blob, WAVE_FORMAT_EXTENSIBLE);
     push_u16(&mut blob, CHANNELS);
-    push_u32(&mut blob, rate);
+    push_u32(&mut blob, rate_hz);
     push_u32(&mut blob, avg_bytes_per_sec);
     push_u16(&mut blob, block_align);
     push_u16(&mut blob, bits);
@@ -340,7 +346,7 @@ mod tests {
 
     #[test]
     fn waveformat_extensible_blob_matches_48k_24bit_stereo() {
-        let blob = make_waveformat_extensible_blob(48_000, 24);
+        let blob = make_waveformat_extensible_blob(SampleRate::R48000, SampleWidth::Bits24);
 
         assert_eq!(blob.len(), 40);
         assert_eq!(&blob[0..2], &WAVE_FORMAT_EXTENSIBLE.to_le_bytes());
@@ -357,7 +363,7 @@ mod tests {
 
     #[test]
     fn waveformat_extensible_blob_matches_48k_32bit_stereo() {
-        let blob = make_waveformat_extensible_blob(48_000, 32);
+        let blob = make_waveformat_extensible_blob(SampleRate::R48000, SampleWidth::Bits32);
 
         assert_eq!(blob.len(), 40);
         assert_eq!(&blob[8..12], &384_000u32.to_le_bytes());

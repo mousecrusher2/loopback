@@ -19,8 +19,8 @@ use report::print_report;
 use shared_format::prepare_capture_shared_format;
 use stream::run_one;
 use types::{
-    AudioConfig, CaptureMode, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS, DeviceSelector,
-    SharedFormatMode, StreamTiming, validate_config,
+    AudioConfig, AudioRunConfig, CaptureMode, DEFAULT_BUFFER_PERIODS, DEFAULT_PERIOD_MS,
+    DeviceSelector, SampleRate, SampleWidth, SharedFormatMode, StreamTiming,
 };
 
 fn main() -> Result<()> {
@@ -46,9 +46,7 @@ fn main() -> Result<()> {
                 render_id: args.render_id.clone(),
                 capture_id: args.capture_id.clone(),
             };
-            let config = AudioConfig {
-                rate: args.rate,
-                bits: args.bits,
+            let run = AudioRunConfig {
                 seconds: args.seconds,
                 timing: timing_arg(args.timing),
                 capture_mode: capture_mode_arg(args.capture_mode),
@@ -57,7 +55,7 @@ fn main() -> Result<()> {
                 pre_roll_ms: args.pre_roll_ms,
                 tail_ms: args.tail_ms,
             };
-            validate_config(&config)?;
+            let config = AudioConfig::from_raw(args.rate, args.bits, run)?;
             let report = run_with_shared_format(
                 config,
                 selector,
@@ -77,23 +75,24 @@ fn main() -> Result<()> {
                 render_id: args.render_id.clone(),
                 capture_id: args.capture_id.clone(),
             };
+            let run = AudioRunConfig {
+                seconds: args.seconds,
+                timing: timing_arg(args.timing),
+                capture_mode: capture_mode_arg(args.capture_mode),
+                period_ms: DEFAULT_PERIOD_MS,
+                buffer_periods: DEFAULT_BUFFER_PERIODS,
+                pre_roll_ms: 250,
+                tail_ms: 500,
+            };
             let mut failures = 0;
-            for rate in [96_000u32, 88_200, 48_000, 44_100] {
-                for bits in [32u16, 24, 16] {
-                    if bits == 32 && !matches!(rate, 44_100 | 48_000) {
+            for sample_rate in SampleRate::matrix_order() {
+                for sample_width in SampleWidth::matrix_order() {
+                    if !sample_width.supports_sample_rate(sample_rate) {
                         continue;
                     }
-                    let config = AudioConfig {
-                        rate,
-                        bits,
-                        seconds: args.seconds,
-                        timing: timing_arg(args.timing),
-                        capture_mode: capture_mode_arg(args.capture_mode),
-                        period_ms: DEFAULT_PERIOD_MS,
-                        buffer_periods: DEFAULT_BUFFER_PERIODS,
-                        pre_roll_ms: 250,
-                        tail_ms: 500,
-                    };
+                    let rate = sample_rate.hz();
+                    let bits = sample_width.bits();
+                    let config = AudioConfig::new(sample_rate, sample_width, run)?;
                     let dump_dir = args
                         .dump_dir
                         .as_ref()
