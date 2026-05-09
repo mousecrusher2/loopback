@@ -4,7 +4,7 @@ use embassy_sync::pipe::Pipe;
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
 
 use crate::audio::{AudioState, MAX_PACKET_SIZE, PACKET_LEN_QUEUE_SIZE, PIPE_SIZE, PacketClock};
-use crate::diag;
+use crate::diag::{self, InFallbackReason};
 
 pub type AudioPipe = Pipe<CriticalSectionRawMutex, PIPE_SIZE>;
 pub type PacketLenQueue = Channel<CriticalSectionRawMutex, u16, PACKET_LEN_QUEUE_SIZE>;
@@ -93,18 +93,24 @@ pub async fn in_task<'d, D: Driver<'d>>(
 
             let format_matches = formats.loopback_format_matches();
             let mut read_loopback = false;
+            let mut fallback_reason = None;
             let packet_len = if format_matches {
                 if let Ok(len) = packet_lens.try_receive() {
                     read_loopback = true;
                     usize::from(len)
                 } else {
                     diag::add_in_queue_empty();
+                    fallback_reason = Some(InFallbackReason::QueueEmpty);
                     clock.next_len(in_format.rate, bytes_per_audio_frame)
                 }
             } else {
+                fallback_reason = Some(InFallbackReason::FormatMismatch);
                 clock.next_len(in_format.rate, bytes_per_audio_frame)
             };
             packet[..packet_len].fill(0);
+            if let Some(reason) = fallback_reason {
+                diag::add_in_fallback(reason, packet_len);
+            }
             diag::add_in_packet(packet_len);
 
             if read_loopback {
@@ -120,7 +126,9 @@ pub async fn in_task<'d, D: Driver<'d>>(
                     }
                 }
                 if offset < packet_len {
-                    diag::add_in_underrun(packet_len - offset);
+                    let missing = packet_len - offset;
+                    diag::add_in_underrun(missing);
+                    diag::add_in_fallback(InFallbackReason::Underrun, missing);
                 }
             } else if !format_matches {
                 pipe.clear();

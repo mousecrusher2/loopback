@@ -998,6 +998,7 @@ dependencies = [
  "embassy-futures",
  "embassy-rp",
  "embassy-sync",
+ "embassy-time",
  "embassy-usb",
  "embedded-test",
  "panic-halt",

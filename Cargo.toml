@@ -10,6 +10,7 @@ embassy-executor = { version = "0.10.0", features = ["executor-thread", "platfor
 embassy-futures = "0.1.2"
 embassy-rp = { version = "0.10.0", features = ["binary-info", "critical-section-impl", "imagedef-secure-exe", "rp235xa", "time-driver"] }
 embassy-sync = "0.8.0"
+embassy-time = "0.5.1"
 embassy-usb = { version = "0.6.0", default-features = false, features = ["max-handler-count-1", "max-interface-count-4"] }
 embedded-test = "0.7.1"
 panic-halt = "1"

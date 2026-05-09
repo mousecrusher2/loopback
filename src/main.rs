@@ -2,6 +2,9 @@
 #![no_std]
 
 use embassy_executor::Spawner;
+use embassy_rp::gpio::{Level, Output};
+use embassy_rp::{Peri, peripherals};
+use embassy_time::Timer;
 use embassy_usb::UsbDevice;
 use embassy_usb::driver::Driver;
 use embassy_usb::{Builder, Config};
@@ -9,6 +12,7 @@ use panic_halt as _;
 use pico2_uac1_loopback::audio::AudioState;
 use pico2_uac1_loopback::control::AudioControlHandler;
 use pico2_uac1_loopback::descriptors::build_audio_function;
+use pico2_uac1_loopback::diag;
 use pico2_uac1_loopback::irq::{UsbDriver, usb_driver};
 use pico2_uac1_loopback::tasks::{AudioPipe, PacketLenQueue, in_task, out_task};
 use static_cell::StaticCell;
@@ -68,6 +72,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(in_endpoint_task(endpoints.in_ep16).expect("IN task pool exhausted"));
     spawner.spawn(in_endpoint_task(endpoints.in_ep24).expect("IN task pool exhausted"));
     spawner.spawn(in_endpoint_task(endpoints.in_ep32).expect("IN task pool exhausted"));
+    spawner.spawn(fallback_led_task(p.PIN_25).expect("fallback LED task pool exhausted"));
 }
 
 #[embassy_executor::task]
@@ -83,4 +88,30 @@ async fn out_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointOut) {
 #[embassy_executor::task(pool_size = 3)]
 async fn in_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointIn) {
     in_task::<UsbDriver>(ep, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS).await;
+}
+
+#[embassy_executor::task]
+async fn fallback_led_task(pin: Peri<'static, peripherals::PIN_25>) {
+    const POLL_MS: u64 = 10;
+    const HOLD_TICKS: u16 = (1_000 / POLL_MS) as u16;
+
+    let mut led = Output::new(pin, Level::Low);
+    let mut last_seen = diag::in_fallback_packets();
+    let mut hold_ticks = 0;
+
+    loop {
+        let current = diag::in_fallback_packets();
+        if current != last_seen {
+            last_seen = current;
+            hold_ticks = HOLD_TICKS;
+            led.set_high();
+        } else if hold_ticks > 0 {
+            hold_ticks -= 1;
+            if hold_ticks == 0 {
+                led.set_low();
+            }
+        }
+
+        Timer::after_millis(POLL_MS).await;
+    }
 }

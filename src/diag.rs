@@ -1,4 +1,44 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::audio::{AudioStreamingAlternateSetting, SampleRate};
+
+#[derive(Clone, Copy)]
+pub enum InFallbackReason {
+    QueueEmpty,
+    FormatMismatch,
+    Underrun,
+}
+
+impl InFallbackReason {
+    const fn code(self) -> u32 {
+        match self {
+            Self::QueueEmpty => 1,
+            Self::FormatMismatch => 2,
+            Self::Underrun => 3,
+        }
+    }
+}
+
+// SAFETY: These diagnostics symbols use unique project-prefixed names and are
+// defined exactly once. They are atomics, so debugger reads do not require
+// non-atomic access. The atomics are kept even without the diagnostics feature
+// so the LED task can observe fallback events without exporting the symbols.
+#[cfg_attr(feature = "diagnostics", unsafe(no_mangle))]
+pub static UAC_DIAG_IN_FALLBACK_PACKETS: AtomicU32 = AtomicU32::new(0);
+#[cfg_attr(feature = "diagnostics", unsafe(no_mangle))]
+pub static UAC_DIAG_IN_FALLBACK_BYTES: AtomicU32 = AtomicU32::new(0);
+#[cfg_attr(feature = "diagnostics", unsafe(no_mangle))]
+pub static UAC_DIAG_IN_FALLBACK_LAST_REASON: AtomicU32 = AtomicU32::new(0);
+
+pub fn add_in_fallback(reason: InFallbackReason, len: usize) {
+    UAC_DIAG_IN_FALLBACK_PACKETS.fetch_add(1, Ordering::Relaxed);
+    UAC_DIAG_IN_FALLBACK_BYTES.fetch_add(len as u32, Ordering::Relaxed);
+    UAC_DIAG_IN_FALLBACK_LAST_REASON.store(reason.code(), Ordering::Relaxed);
+}
+
+pub fn in_fallback_packets() -> u32 {
+    UAC_DIAG_IN_FALLBACK_PACKETS.load(Ordering::Relaxed)
+}
 
 #[cfg(feature = "diagnostics")]
 mod enabled {
