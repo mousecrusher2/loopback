@@ -1001,6 +1001,7 @@ dependencies = [
  "embassy-time",
  "embassy-usb",
  "embedded-test",
+ "heapless",
  "panic-halt",
  "static_cell",
 ]

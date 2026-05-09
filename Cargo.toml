@@ -13,6 +13,7 @@ embassy-sync = "0.8.0"
 embassy-time = "0.5.1"
 embassy-usb = { version = "0.6.0", default-features = false, features = ["max-handler-count-1", "max-interface-count-4"] }
 embedded-test = "0.7.1"
+heapless = "0.9.3"
 panic-halt = "1"
 static_cell = "2"
 

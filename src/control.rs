@@ -3,7 +3,7 @@ use embassy_usb::types::InterfaceNumber;
 
 use crate::audio::{AudioState, AudioStreamingAlternateSetting, SampleRate, StreamDirection};
 use crate::diag;
-use crate::tasks::{AudioPipe, PacketLenQueue};
+use crate::tasks::PacketQueue;
 
 const SET_CUR: u8 = 0x01;
 const GET_CUR: u8 = 0x81;
@@ -14,8 +14,7 @@ const SAMPLING_FREQ_CONTROL: u8 = 0x01;
 
 pub struct AudioControlHandler {
     state: &'static AudioState,
-    pipe: &'static AudioPipe,
-    packet_lens: &'static PacketLenQueue,
+    packets: &'static PacketQueue,
     out_streaming_if: InterfaceNumber,
     in_streaming_if: InterfaceNumber,
     out_ep_addrs: [u8; 3],
@@ -25,8 +24,7 @@ pub struct AudioControlHandler {
 impl AudioControlHandler {
     pub fn new(
         state: &'static AudioState,
-        pipe: &'static AudioPipe,
-        packet_lens: &'static PacketLenQueue,
+        packets: &'static PacketQueue,
         out_streaming_if: InterfaceNumber,
         in_streaming_if: InterfaceNumber,
         out_ep_addrs: [u8; 3],
@@ -34,8 +32,7 @@ impl AudioControlHandler {
     ) -> Self {
         Self {
             state,
-            pipe,
-            packet_lens,
+            packets,
             out_streaming_if,
             in_streaming_if,
             out_ep_addrs,
@@ -81,8 +78,7 @@ impl embassy_usb::Handler for AudioControlHandler {
         diag::set_in_alt(AudioStreamingAlternateSetting::Inactive);
         diag::set_out_rate(None);
         diag::set_in_rate(None);
-        self.pipe.clear();
-        self.packet_lens.clear();
+        self.packets.clear();
     }
 
     fn set_alternate_setting(&mut self, iface: InterfaceNumber, alternate_setting: u8) {
@@ -90,8 +86,7 @@ impl embassy_usb::Handler for AudioControlHandler {
             let Some(alternate_setting) =
                 AudioStreamingAlternateSetting::from_number(alternate_setting)
             else {
-                self.pipe.clear();
-                self.packet_lens.clear();
+                self.packets.clear();
                 return;
             };
 
@@ -108,8 +103,7 @@ impl embassy_usb::Handler for AudioControlHandler {
                     diag::set_in_rate(Some(format.rate));
                 }
             }
-            self.pipe.clear();
-            self.packet_lens.clear();
+            self.packets.clear();
         }
     }
 
@@ -146,8 +140,7 @@ impl embassy_usb::Handler for AudioControlHandler {
             StreamDirection::Out => diag::set_out_rate(Some(format.rate)),
             StreamDirection::In => diag::set_in_rate(Some(format.rate)),
         }
-        self.pipe.clear();
-        self.packet_lens.clear();
+        self.packets.clear();
         Some(OutResponse::Accepted)
     }
 

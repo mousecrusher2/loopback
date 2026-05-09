@@ -14,12 +14,11 @@ use pico2_uac1_loopback::control::AudioControlHandler;
 use pico2_uac1_loopback::descriptors::build_audio_function;
 use pico2_uac1_loopback::diag;
 use pico2_uac1_loopback::irq::{UsbDriver, usb_driver};
-use pico2_uac1_loopback::tasks::{AudioPipe, PacketLenQueue, in_task, out_task};
+use pico2_uac1_loopback::tasks::{PacketQueue, in_task, out_task};
 use static_cell::StaticCell;
 
 static AUDIO_STATE: AudioState = AudioState::new();
-static AUDIO_PIPE: AudioPipe = AudioPipe::new();
-static PACKET_LENS: PacketLenQueue = PacketLenQueue::new();
+static PACKETS: PacketQueue = PacketQueue::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -56,8 +55,7 @@ async fn main(spawner: Spawner) {
     let endpoints = build_audio_function(&mut builder);
     let handler = HANDLER.init(AudioControlHandler::new(
         &AUDIO_STATE,
-        &AUDIO_PIPE,
-        &PACKET_LENS,
+        &PACKETS,
         endpoints.out_streaming_if,
         endpoints.in_streaming_if,
         endpoints.out_ep_addrs,
@@ -82,12 +80,12 @@ async fn usb_task(mut usb: UsbDevice<'static, UsbDriver>) {
 
 #[embassy_executor::task(pool_size = 3)]
 async fn out_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointOut) {
-    out_task::<UsbDriver>(ep, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS).await;
+    out_task::<UsbDriver>(ep, &AUDIO_STATE, &PACKETS).await;
 }
 
 #[embassy_executor::task(pool_size = 3)]
 async fn in_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointIn) {
-    in_task::<UsbDriver>(ep, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS).await;
+    in_task::<UsbDriver>(ep, &AUDIO_STATE, &PACKETS).await;
 }
 
 #[embassy_executor::task]

@@ -1,19 +1,18 @@
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_sync::pipe::Pipe;
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
+use heapless::Vec;
 
-use crate::audio::{AudioState, MAX_PACKET_SIZE, PACKET_LEN_QUEUE_SIZE, PIPE_SIZE, PacketClock};
+use crate::audio::{AudioState, MAX_PACKET_SIZE, PACKET_QUEUE_SIZE, PacketClock};
 use crate::diag::{self, InFallbackReason};
 
-pub type AudioPipe = Pipe<CriticalSectionRawMutex, PIPE_SIZE>;
-pub type PacketLenQueue = Channel<CriticalSectionRawMutex, u16, PACKET_LEN_QUEUE_SIZE>;
+pub type AudioPacket = Vec<u8, MAX_PACKET_SIZE>;
+pub type PacketQueue = Channel<CriticalSectionRawMutex, AudioPacket, PACKET_QUEUE_SIZE>;
 
 pub async fn out_task<'d, D: Driver<'d>>(
     mut ep: D::EndpointOut,
     state: &'static AudioState,
-    pipe: &'static AudioPipe,
-    packet_lens: &'static PacketLenQueue,
+    packets: &'static PacketQueue,
 ) {
     let mut packet = [0u8; MAX_PACKET_SIZE];
 
@@ -34,18 +33,15 @@ pub async fn out_task<'d, D: Driver<'d>>(
                         || bytes_per_audio_frame == 0
                         || len % bytes_per_audio_frame != 0
                     {
-                        pipe.clear();
-                        packet_lens.clear();
-                    } else if enqueue_packet(pipe, packet_lens, &packet[..len]).is_err() {
-                        pipe.clear();
-                        packet_lens.clear();
+                        packets.clear();
+                    } else if enqueue_packet(packets, &packet[..len]).is_err() {
+                        packets.clear();
                         diag::add_out_drop();
-                        let _ = enqueue_packet(pipe, packet_lens, &packet[..len]);
+                        let _ = enqueue_packet(packets, &packet[..len]);
                     }
                 }
                 Err(EndpointError::Disabled) => {
-                    pipe.clear();
-                    packet_lens.clear();
+                    packets.clear();
                     break;
                 }
                 Err(EndpointError::BufferOverflow) => {}
@@ -54,27 +50,16 @@ pub async fn out_task<'d, D: Driver<'d>>(
     }
 }
 
-fn enqueue_packet(pipe: &AudioPipe, packet_lens: &PacketLenQueue, packet: &[u8]) -> Result<(), ()> {
-    if pipe.free_capacity() < packet.len() {
-        return Err(());
-    }
-
-    let mut offset = 0;
-    while offset < packet.len() {
-        let written = pipe.try_write(&packet[offset..]).map_err(|_| ())?;
-        if written == 0 {
-            return Err(());
-        }
-        offset += written;
-    }
-    packet_lens.try_send(packet.len() as u16).map_err(|_| ())
+fn enqueue_packet(packets: &PacketQueue, packet: &[u8]) -> Result<(), ()> {
+    let mut owned = AudioPacket::new();
+    owned.extend_from_slice(packet).map_err(|_| ())?;
+    packets.try_send(owned).map_err(|_| ())
 }
 
 pub async fn in_task<'d, D: Driver<'d>>(
     mut ep: D::EndpointIn,
     state: &'static AudioState,
-    pipe: &'static AudioPipe,
-    packet_lens: &'static PacketLenQueue,
+    packets: &'static PacketQueue,
 ) {
     let mut packet = [0u8; MAX_PACKET_SIZE];
     let mut clock = PacketClock::new();
@@ -92,54 +77,45 @@ pub async fn in_task<'d, D: Driver<'d>>(
             }
 
             let format_matches = formats.loopback_format_matches();
-            let mut read_loopback = false;
             let mut fallback_reason = None;
-            let packet_len = if format_matches {
-                if let Ok(len) = packet_lens.try_receive() {
-                    read_loopback = true;
-                    usize::from(len)
-                } else {
-                    diag::add_in_queue_empty();
-                    fallback_reason = Some(InFallbackReason::QueueEmpty);
-                    clock.next_len(in_format.rate, bytes_per_audio_frame)
+            let loopback_packet = if format_matches {
+                match packets.try_receive() {
+                    Ok(packet) => Some(packet),
+                    Err(_) => {
+                        diag::add_in_queue_empty();
+                        fallback_reason = Some(InFallbackReason::QueueEmpty);
+                        None
+                    }
                 }
             } else {
                 fallback_reason = Some(InFallbackReason::FormatMismatch);
-                clock.next_len(in_format.rate, bytes_per_audio_frame)
+                None
             };
-            packet[..packet_len].fill(0);
-            if let Some(reason) = fallback_reason {
-                diag::add_in_fallback(reason, packet_len);
-            }
-            diag::add_in_packet(packet_len);
 
-            if read_loopback {
-                let mut offset = 0;
-                while offset < packet_len {
-                    match pipe.try_read(&mut packet[offset..packet_len]) {
-                        Ok(0) => break,
-                        Ok(read) => {
-                            offset += read;
-                            diag::add_in_pipe_bytes(read);
-                        }
-                        Err(_) => break,
-                    }
+            let write_result = if let Some(loopback_packet) = loopback_packet {
+                let len = loopback_packet.len();
+                diag::add_in_packet(len);
+                diag::add_in_loopback_bytes(len);
+                ep.write(loopback_packet.as_slice()).await
+            } else {
+                let packet_len = clock.next_len(in_format.rate, bytes_per_audio_frame);
+                packet[..packet_len].fill(0);
+                if let Some(reason) = fallback_reason {
+                    diag::add_in_fallback(reason, packet_len);
                 }
-                if offset < packet_len {
-                    let missing = packet_len - offset;
-                    diag::add_in_underrun(missing);
-                    diag::add_in_fallback(InFallbackReason::Underrun, missing);
-                }
-            } else if !format_matches {
-                pipe.clear();
-                packet_lens.clear();
-            }
+                diag::add_in_packet(packet_len);
 
-            match ep.write(&packet[..packet_len]).await {
+                if !format_matches {
+                    packets.clear();
+                }
+
+                ep.write(&packet[..packet_len]).await
+            };
+
+            match write_result {
                 Ok(()) => {}
                 Err(EndpointError::Disabled) => {
-                    pipe.clear();
-                    packet_lens.clear();
+                    packets.clear();
                     break;
                 }
                 Err(EndpointError::BufferOverflow) => {}
