@@ -17,6 +17,14 @@ Build:
 cargo build --release
 ```
 
+Build UF2:
+
+```powershell
+pwsh -File scripts/build-uf2.ps1
+```
+
+The UF2 is written to `target/uf2/pico2-uac1-loopback.uf2`.
+
 Run the embedded unit tests over the debug probe:
 
 ```powershell
