@@ -2,7 +2,8 @@
 #![no_std]
 
 use embassy_executor::Spawner;
-use embassy_futures::join::join3;
+use embassy_usb::UsbDevice;
+use embassy_usb::driver::Driver;
 use embassy_usb::{Builder, Config};
 use panic_halt as _;
 use pico2_uac1_loopback::audio::AudioState;
@@ -17,7 +18,7 @@ static AUDIO_PIPE: AudioPipe = AudioPipe::new();
 static PACKET_LENS: PacketLenQueue = PacketLenQueue::new();
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let driver = usb_driver(p.USB);
 
@@ -60,26 +61,26 @@ async fn main(_spawner: Spawner) {
     ));
     builder.handler(handler);
 
-    let mut usb = builder.build();
+    spawner.spawn(usb_task(builder.build()).expect("USB task pool exhausted"));
+    spawner.spawn(out_endpoint_task(endpoints.out_ep16).expect("OUT task pool exhausted"));
+    spawner.spawn(out_endpoint_task(endpoints.out_ep24).expect("OUT task pool exhausted"));
+    spawner.spawn(out_endpoint_task(endpoints.out_ep32).expect("OUT task pool exhausted"));
+    spawner.spawn(in_endpoint_task(endpoints.in_ep16).expect("IN task pool exhausted"));
+    spawner.spawn(in_endpoint_task(endpoints.in_ep24).expect("IN task pool exhausted"));
+    spawner.spawn(in_endpoint_task(endpoints.in_ep32).expect("IN task pool exhausted"));
+}
 
-    join3(
-        usb.run(),
-        async {
-            join3(
-                out_task::<UsbDriver>(endpoints.out_ep16, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
-                out_task::<UsbDriver>(endpoints.out_ep24, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
-                out_task::<UsbDriver>(endpoints.out_ep32, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
-            )
-            .await;
-        },
-        async {
-            join3(
-                in_task::<UsbDriver>(endpoints.in_ep16, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
-                in_task::<UsbDriver>(endpoints.in_ep24, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
-                in_task::<UsbDriver>(endpoints.in_ep32, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS),
-            )
-            .await;
-        },
-    )
-    .await;
+#[embassy_executor::task]
+async fn usb_task(mut usb: UsbDevice<'static, UsbDriver>) {
+    usb.run().await;
+}
+
+#[embassy_executor::task(pool_size = 3)]
+async fn out_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointOut) {
+    out_task::<UsbDriver>(ep, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS).await;
+}
+
+#[embassy_executor::task(pool_size = 3)]
+async fn in_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointIn) {
+    in_task::<UsbDriver>(ep, &AUDIO_STATE, &AUDIO_PIPE, &PACKET_LENS).await;
 }
