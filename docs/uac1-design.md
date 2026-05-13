@@ -8,10 +8,11 @@ This firmware exposes one USB Audio Class 1.0 function with three interfaces:
 
 The AudioControl topology intentionally presents a generic speaker path and a
 generic microphone path, because current desktop hosts classify these terminal
-types reliably. The firmware data path loops the OUT byte stream back into the
-IN endpoint when both active alternate settings use the same sample width and
-the same sampling frequency. If the host opens mismatched formats, the IN stream
-returns digital silence instead of reinterpreting the byte stream.
+types reliably. The firmware data path queues complete OUT isochronous packet
+payloads and returns them through the IN endpoint when both active alternate
+settings use the same sample width and the same sampling frequency. If the host
+opens mismatched formats, the IN stream returns digital silence instead of
+reinterpreting the byte stream.
 
 ## Formats
 
@@ -70,7 +71,6 @@ would be appropriate.
 ## Endpoint controls
 
 The class-specific endpoint descriptor advertises Sampling Frequency Control.
-`SET_CUR` stores the closest supported discrete sample rate, matching UAC1
-section 5.2.3.2.3.1 guidance for unsupported discrete values. `GET_CUR`,
-`GET_MIN`, `GET_MAX`, and `GET_RES` return three-byte little-endian frequency
-values.
+`SET_CUR` accepts only the discrete sample rates advertised by the selected
+alternate setting and rejects unsupported values. `GET_CUR`, `GET_MIN`,
+`GET_MAX`, and `GET_RES` return three-byte little-endian frequency values.
