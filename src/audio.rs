@@ -17,10 +17,10 @@ const DEFAULT_AUDIO_FORMATS: AudioFormats = AudioFormats {
     out: DEFAULT_STREAM_FORMAT,
     in_: DEFAULT_STREAM_FORMAT,
 };
-pub const MAX_PACKET_SIZE_16: usize = 97 * CHANNEL_COUNT as usize * 2;
-pub const MAX_PACKET_SIZE_24: usize = 97 * CHANNEL_COUNT as usize * 3;
-pub const MAX_PACKET_SIZE_32: usize = 49 * CHANNEL_COUNT as usize * 4;
-pub const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24;
+pub const MAX_PACKET_SIZE_16: u16 = 97 * CHANNEL_COUNT as u16 * 2;
+pub const MAX_PACKET_SIZE_24: u16 = 97 * CHANNEL_COUNT as u16 * 3;
+pub const MAX_PACKET_SIZE_32: u16 = 49 * CHANNEL_COUNT as u16 * 4;
+pub const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24 as usize;
 pub const PACKET_QUEUE_SIZE: usize = 16;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -197,8 +197,8 @@ impl AudioFormats {
 
     const fn decode(bits: u32) -> Self {
         Self::new(
-            StreamFormat::decode(bits as u8),
-            StreamFormat::decode((bits >> 8) as u8),
+            StreamFormat::decode((bits & 0xff) as u8),
+            StreamFormat::decode(((bits >> 8) & 0xff) as u8),
         )
     }
 }

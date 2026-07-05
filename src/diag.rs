@@ -28,9 +28,15 @@ pub static UAC_DIAG_IN_FALLBACK_BYTES: AtomicU32 = AtomicU32::new(0);
 #[cfg_attr(feature = "diagnostics", unsafe(no_mangle))]
 pub static UAC_DIAG_IN_FALLBACK_LAST_REASON: AtomicU32 = AtomicU32::new(0);
 
+/// Adds one IN fallback packet and its byte length to diagnostics.
+///
+/// # Panics
+///
+/// Panics if `len` does not fit in `u32`.
 pub fn add_in_fallback(reason: InFallbackReason, len: usize) {
     UAC_DIAG_IN_FALLBACK_PACKETS.fetch_add(1, Ordering::Relaxed);
-    UAC_DIAG_IN_FALLBACK_BYTES.fetch_add(len as u32, Ordering::Relaxed);
+    let len = u32::try_from(len).unwrap();
+    UAC_DIAG_IN_FALLBACK_BYTES.fetch_add(len, Ordering::Relaxed);
     UAC_DIAG_IN_FALLBACK_LAST_REASON.store(reason.code(), Ordering::Relaxed);
 }
 
@@ -70,22 +76,40 @@ mod enabled {
     #[unsafe(no_mangle)]
     pub static UAC_DIAG_IN_RATE: AtomicU32 = AtomicU32::new(0);
 
+    /// Adds one OUT packet and its byte length to diagnostics.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len` does not fit in `u32`.
     pub fn add_out_packet(len: usize) {
         UAC_DIAG_OUT_PACKETS.fetch_add(1, Ordering::Relaxed);
-        UAC_DIAG_OUT_BYTES.fetch_add(len as u32, Ordering::Relaxed);
+        let len = u32::try_from(len).unwrap();
+        UAC_DIAG_OUT_BYTES.fetch_add(len, Ordering::Relaxed);
     }
 
     pub fn add_out_drop() {
         UAC_DIAG_OUT_DROPS.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Adds one IN packet and its byte length to diagnostics.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len` does not fit in `u32`.
     pub fn add_in_packet(len: usize) {
         UAC_DIAG_IN_PACKETS.fetch_add(1, Ordering::Relaxed);
-        UAC_DIAG_IN_BYTES.fetch_add(len as u32, Ordering::Relaxed);
+        let len = u32::try_from(len).unwrap();
+        UAC_DIAG_IN_BYTES.fetch_add(len, Ordering::Relaxed);
     }
 
+    /// Adds loopback byte length to diagnostics.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len` does not fit in `u32`.
     pub fn add_in_loopback_bytes(len: usize) {
-        UAC_DIAG_IN_LOOPBACK_BYTES.fetch_add(len as u32, Ordering::Relaxed);
+        let len = u32::try_from(len).unwrap();
+        UAC_DIAG_IN_LOOPBACK_BYTES.fetch_add(len, Ordering::Relaxed);
     }
 
     pub fn add_in_queue_empty() {

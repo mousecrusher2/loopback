@@ -172,13 +172,12 @@ impl embassy_usb::Handler for AudioControlHandler {
             _ => return Some(InResponse::Rejected),
         };
 
-        if buf.len() < 3 {
+        let Some(buf) = buf.first_chunk_mut::<3>() else {
             return Some(InResponse::Rejected);
-        }
+        };
 
-        buf[0] = value as u8;
-        buf[1] = (value >> 8) as u8;
-        buf[2] = (value >> 16) as u8;
-        Some(InResponse::Accepted(&buf[..3]))
+        let [value @ .., _] = value.to_le_bytes();
+        *buf = value;
+        Some(InResponse::Accepted(buf))
     }
 }

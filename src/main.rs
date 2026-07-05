@@ -91,7 +91,7 @@ async fn in_endpoint_task(ep: <UsbDriver as Driver<'static>>::EndpointIn) {
 #[embassy_executor::task]
 async fn fallback_led_task(pin: Peri<'static, peripherals::PIN_25>) {
     const POLL_MS: u64 = 10;
-    const HOLD_TICKS: u16 = (1_000 / POLL_MS) as u16;
+    const HOLD_TICKS: u64 = 1_000 / POLL_MS;
 
     let mut led = Output::new(pin, Level::Low);
     let mut last_seen = diag::in_fallback_packets();

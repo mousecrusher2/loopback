@@ -104,17 +104,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 16,
                 &SUPPORTED_SAMPLE_RATES,
             );
-            out_ep16 = alt16.alloc_endpoint_out(
-                EndpointType::Isochronous,
-                None,
-                MAX_PACKET_SIZE_16 as u16,
-                1,
-            );
+            out_ep16 =
+                alt16.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
             out_info16 = *out_ep16.info();
             write_audio_data_endpoint(
                 &mut alt16,
                 &out_info16,
-                MAX_PACKET_SIZE_16 as u16,
+                MAX_PACKET_SIZE_16,
                 SynchronizationType::Adaptive,
             );
             write_class_specific_endpoint(&mut alt16);
@@ -133,17 +129,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 24,
                 &SUPPORTED_SAMPLE_RATES,
             );
-            out_ep24 = alt24.alloc_endpoint_out(
-                EndpointType::Isochronous,
-                None,
-                MAX_PACKET_SIZE_24 as u16,
-                1,
-            );
+            out_ep24 =
+                alt24.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
             out_info24 = *out_ep24.info();
             write_audio_data_endpoint(
                 &mut alt24,
                 &out_info24,
-                MAX_PACKET_SIZE_24 as u16,
+                MAX_PACKET_SIZE_24,
                 SynchronizationType::Adaptive,
             );
             write_class_specific_endpoint(&mut alt24);
@@ -162,17 +154,13 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
                 32,
                 &SUPPORTED_SAMPLE_RATES_32,
             );
-            out_ep32 = alt32.alloc_endpoint_out(
-                EndpointType::Isochronous,
-                None,
-                MAX_PACKET_SIZE_32 as u16,
-                1,
-            );
+            out_ep32 =
+                alt32.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
             out_info32 = *out_ep32.info();
             write_audio_data_endpoint(
                 &mut alt32,
                 &out_info32,
-                MAX_PACKET_SIZE_32 as u16,
+                MAX_PACKET_SIZE_32,
                 SynchronizationType::Adaptive,
             );
             write_class_specific_endpoint(&mut alt32);
@@ -210,17 +198,12 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             16,
             &SUPPORTED_SAMPLE_RATES,
         );
-        in_ep16 = alt16.alloc_endpoint_in(
-            EndpointType::Isochronous,
-            None,
-            MAX_PACKET_SIZE_16 as u16,
-            1,
-        );
+        in_ep16 = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
         in_info16 = *in_ep16.info();
         write_audio_data_endpoint(
             &mut alt16,
             &in_info16,
-            MAX_PACKET_SIZE_16 as u16,
+            MAX_PACKET_SIZE_16,
             SynchronizationType::Asynchronous,
         );
         write_class_specific_endpoint(&mut alt16);
@@ -239,17 +222,12 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             24,
             &SUPPORTED_SAMPLE_RATES,
         );
-        in_ep24 = alt24.alloc_endpoint_in(
-            EndpointType::Isochronous,
-            None,
-            MAX_PACKET_SIZE_24 as u16,
-            1,
-        );
+        in_ep24 = alt24.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
         in_info24 = *in_ep24.info();
         write_audio_data_endpoint(
             &mut alt24,
             &in_info24,
-            MAX_PACKET_SIZE_24 as u16,
+            MAX_PACKET_SIZE_24,
             SynchronizationType::Asynchronous,
         );
         write_class_specific_endpoint(&mut alt24);
@@ -268,17 +246,12 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
             32,
             &SUPPORTED_SAMPLE_RATES_32,
         );
-        in_ep32 = alt32.alloc_endpoint_in(
-            EndpointType::Isochronous,
-            None,
-            MAX_PACKET_SIZE_32 as u16,
-            1,
-        );
+        in_ep32 = alt32.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
         in_info32 = *in_ep32.info();
         write_audio_data_endpoint(
             &mut alt32,
             &in_info32,
-            MAX_PACKET_SIZE_32 as u16,
+            MAX_PACKET_SIZE_32,
             SynchronizationType::Asynchronous,
         );
         write_class_specific_endpoint(&mut alt32);
@@ -312,6 +285,7 @@ fn write_audio_control_descriptors<'d, D: Driver<'d>>(
     in_streaming_if: u8,
 ) {
     const AC_TOTAL_LENGTH: u16 = 52;
+    let [lo, hi] = AC_TOTAL_LENGTH.to_le_bytes();
 
     alt.descriptor(
         CS_INTERFACE,
@@ -319,8 +293,8 @@ fn write_audio_control_descriptors<'d, D: Driver<'d>>(
             AC_HEADER,
             0x00,
             0x01,
-            AC_TOTAL_LENGTH as u8,
-            (AC_TOTAL_LENGTH >> 8) as u8,
+            lo,
+            hi,
             0x02,
             out_streaming_if,
             in_streaming_if,
@@ -362,17 +336,20 @@ fn write_input_terminal<'d, D: Driver<'d>>(
     channel_count: u8,
     channel_config: u16,
 ) {
+    let [tt0, tt1] = terminal_type.to_le_bytes();
+    let [cc0, cc1] = channel_config.to_le_bytes();
+
     alt.descriptor(
         CS_INTERFACE,
         &[
             AC_INPUT_TERMINAL,
             terminal_id,
-            terminal_type as u8,
-            (terminal_type >> 8) as u8,
+            tt0,
+            tt1,
             0x00,
             channel_count,
-            channel_config as u8,
-            (channel_config >> 8) as u8,
+            cc0,
+            cc1,
             0x00,
             0x00,
         ],
@@ -385,13 +362,15 @@ fn write_output_terminal<'d, D: Driver<'d>>(
     terminal_type: u16,
     source_id: u8,
 ) {
+    let [lo, hi] = terminal_type.to_le_bytes();
+
     alt.descriptor(
         CS_INTERFACE,
         &[
             AC_OUTPUT_TERMINAL,
             terminal_id,
-            terminal_type as u8,
-            (terminal_type >> 8) as u8,
+            lo,
+            hi,
             0x00,
             source_id,
             0x00,
@@ -406,16 +385,9 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
     bit_resolution: u8,
     sample_rates: &[SampleRate],
 ) {
-    alt.descriptor(
-        CS_INTERFACE,
-        &[
-            AS_GENERAL,
-            terminal_link,
-            0x01,
-            FORMAT_PCM as u8,
-            (FORMAT_PCM >> 8) as u8,
-        ],
-    );
+    let [lo, hi] = FORMAT_PCM.to_le_bytes();
+
+    alt.descriptor(CS_INTERFACE, &[AS_GENERAL, terminal_link, 0x01, lo, hi]);
 
     let mut format_type = [0u8; 18];
     format_type[0] = FORMAT_TYPE;
@@ -423,13 +395,13 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
     format_type[2] = CHANNEL_COUNT;
     format_type[3] = subframe_size;
     format_type[4] = bit_resolution;
-    format_type[5] = sample_rates.len() as u8;
+    format_type[5] = u8::try_from(sample_rates.len()).expect("sample rate count must fit u8");
     let mut offset = 6;
     for rate in sample_rates {
-        let rate_hz = rate.hz();
-        format_type[offset] = rate_hz as u8;
-        format_type[offset + 1] = (rate_hz >> 8) as u8;
-        format_type[offset + 2] = (rate_hz >> 16) as u8;
+        let [rate_hz @ .., 0] = rate.hz().to_le_bytes() else {
+            unreachable!("sample rate must fit UAC1 24-bit tSamFreq");
+        };
+        format_type[offset..offset + 3].copy_from_slice(&rate_hz);
         offset += 3;
     }
     alt.descriptor(CS_INTERFACE, &format_type[..offset]);
