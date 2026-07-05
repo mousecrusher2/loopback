@@ -347,6 +347,7 @@ impl Default for PacketClock {
 #[cfg(test)]
 #[embedded_test::tests]
 mod tests {
+    #[allow(clippy::wildcard_imports)]
     use super::*;
 
     #[test]
