@@ -1,7 +1,0 @@
-{
-  "rust-analyzer.linkedProjects": [
-    "Cargo.toml",
-    "tools/loopback-check/Cargo.toml"
-  ],
-  "rust-analyzer.cargo.targetDir": true
-}
