@@ -40,6 +40,7 @@ pub enum AudioStreamingAlternateSetting {
 }
 
 impl AudioStreamingAlternateSetting {
+    #[must_use]
     pub const fn from_number(number: u8) -> Option<Self> {
         match number {
             0 => Some(Self::Inactive),
@@ -50,10 +51,12 @@ impl AudioStreamingAlternateSetting {
         }
     }
 
+    #[must_use]
     pub const fn number(self) -> u8 {
         self as u8
     }
 
+    #[must_use]
     pub const fn bytes_per_audio_frame(self) -> usize {
         match self {
             Self::Inactive => 0,
@@ -63,6 +66,7 @@ impl AudioStreamingAlternateSetting {
         }
     }
 
+    #[must_use]
     pub const fn supports_sample_rate(self, rate: SampleRate) -> bool {
         match self {
             Self::Inactive | Self::Pcm16 | Self::Pcm24 => true,
@@ -70,6 +74,7 @@ impl AudioStreamingAlternateSetting {
         }
     }
 
+    #[must_use]
     pub const fn sample_rate_or_default(self, rate: SampleRate) -> SampleRate {
         if self.supports_sample_rate(rate) {
             rate
@@ -80,7 +85,6 @@ impl AudioStreamingAlternateSetting {
 
     const fn from_code(code: u8) -> Self {
         match code & 0x0f {
-            0 => Self::Inactive,
             1 => Self::Pcm16,
             2 => Self::Pcm24,
             3 => Self::Pcm32,
@@ -100,6 +104,7 @@ pub enum SampleRate {
 }
 
 impl SampleRate {
+    #[must_use]
     pub const fn hz(self) -> u32 {
         match self {
             Self::R44100 => 44_100,
@@ -109,6 +114,7 @@ impl SampleRate {
         }
     }
 
+    #[must_use]
     pub const fn from_hz(rate_hz: u32) -> Option<Self> {
         match rate_hz {
             44_100 => Some(Self::R44100),
@@ -141,6 +147,7 @@ pub struct StreamFormat {
 }
 
 impl StreamFormat {
+    #[must_use]
     pub const fn new(alternate_setting: AudioStreamingAlternateSetting, rate: SampleRate) -> Self {
         Self {
             alternate_setting,
@@ -148,6 +155,7 @@ impl StreamFormat {
         }
     }
 
+    #[must_use]
     pub fn bytes_per_audio_frame(self) -> usize {
         self.alternate_setting.bytes_per_audio_frame()
     }
@@ -171,10 +179,12 @@ pub struct AudioFormats {
 }
 
 impl AudioFormats {
+    #[must_use]
     pub const fn new(out: StreamFormat, in_: StreamFormat) -> Self {
         Self { out, in_ }
     }
 
+    #[must_use]
     pub fn loopback_format_matches(self) -> bool {
         self.out.alternate_setting != AudioStreamingAlternateSetting::Inactive
             && self.out.alternate_setting == self.in_.alternate_setting
@@ -204,6 +214,7 @@ enum StreamFormatUpdate {
 }
 
 impl AudioState {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             formats: AtomicU32::new(DEFAULT_AUDIO_FORMATS.encode()),
@@ -303,6 +314,7 @@ pub struct PacketClock {
 }
 
 impl PacketClock {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             rate: DEFAULT_SAMPLE_RATE,

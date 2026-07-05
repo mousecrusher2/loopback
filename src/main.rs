@@ -22,7 +22,7 @@ static PACKETS: PacketQueue = PacketQueue::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
+    let p = embassy_rp::init(embassy_rp::config::Config::default());
     let driver = usb_driver(p.USB);
 
     static CONFIG_DESCRIPTOR: StaticCell<[u8; 1024]> = StaticCell::new();

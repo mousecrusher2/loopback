@@ -20,6 +20,10 @@ static_cell = "2"
 [features]
 diagnostics = []
 
+[lints.clippy]
+pedantic = "warn"
+perf = "warn"
+
 [lib]
 harness = false
 

@@ -79,13 +79,10 @@ pub async fn in_task<'d, D: Driver<'d>>(
             let format_matches = formats.loopback_format_matches();
             let mut fallback_reason = None;
             let loopback_packet = if format_matches {
-                match packets.try_receive() {
-                    Ok(packet) => Some(packet),
-                    Err(_) => {
-                        diag::add_in_queue_empty();
-                        fallback_reason = Some(InFallbackReason::QueueEmpty);
-                        None
-                    }
+                if let Ok(packet) = packets.try_receive() { Some(packet) } else {
+                    diag::add_in_queue_empty();
+                    fallback_reason = Some(InFallbackReason::QueueEmpty);
+                    None
                 }
             } else {
                 fallback_reason = Some(InFallbackReason::FormatMismatch);
@@ -113,12 +110,11 @@ pub async fn in_task<'d, D: Driver<'d>>(
             };
 
             match write_result {
-                Ok(()) => {}
                 Err(EndpointError::Disabled) => {
                     packets.clear();
                     break;
                 }
-                Err(EndpointError::BufferOverflow) => {}
+                Ok(()) | Err(EndpointError::BufferOverflow) => {}
             }
         }
     }
