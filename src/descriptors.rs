@@ -57,205 +57,174 @@ pub fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
     );
 
-    {
-        let mut control_if = function.interface();
-        let control_if_number = control_if.interface_number();
-        let out_streaming_if_number = u8::from(control_if_number) + 1;
-        let in_streaming_if_number = u8::from(control_if_number) + 2;
-        let mut alt = control_if.alt_setting(
-            USB_CLASS_AUDIO,
-            USB_SUBCLASS_AUDIO_CONTROL,
-            USB_AUDIO_PROTOCOL_UNDEFINED,
-            None,
-        );
-        write_audio_control_descriptors(&mut alt, out_streaming_if_number, in_streaming_if_number);
-    }
+    let mut control_if = function.interface();
+    let control_if_number = control_if.interface_number();
+    let out_streaming_if_number = u8::from(control_if_number) + 1;
+    let in_streaming_if_number = u8::from(control_if_number) + 2;
+    let mut alt = control_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_CONTROL,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_audio_control_descriptors(&mut alt, out_streaming_if_number, in_streaming_if_number);
 
-    let out_ep16;
-    let out_ep24;
-    let out_ep32;
-    let out_info16;
-    let out_info24;
-    let out_info32;
-    let out_streaming_if;
-    {
-        let mut out_if = function.interface();
-        out_streaming_if = out_if.interface_number();
-        {
-            let _alt0 = out_if.alt_setting(
-                USB_CLASS_AUDIO,
-                USB_SUBCLASS_AUDIO_STREAMING,
-                USB_AUDIO_PROTOCOL_UNDEFINED,
-                None,
-            );
-        }
+    let mut out_if = function.interface();
+    let out_streaming_if = out_if.interface_number();
 
-        {
-            let mut alt16 = out_if.alt_setting(
-                USB_CLASS_AUDIO,
-                USB_SUBCLASS_AUDIO_STREAMING,
-                USB_AUDIO_PROTOCOL_UNDEFINED,
-                None,
-            );
-            write_streaming_descriptors(
-                &mut alt16,
-                OUT_USB_TERMINAL_ID,
-                2,
-                16,
-                &SUPPORTED_SAMPLE_RATES,
-            );
-            out_ep16 =
-                alt16.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
-            out_info16 = *out_ep16.info();
-            write_audio_data_endpoint(
-                &mut alt16,
-                &out_info16,
-                MAX_PACKET_SIZE_16,
-                SynchronizationType::Adaptive,
-            );
-            write_class_specific_endpoint(&mut alt16);
-        }
-        {
-            let mut alt24 = out_if.alt_setting(
-                USB_CLASS_AUDIO,
-                USB_SUBCLASS_AUDIO_STREAMING,
-                USB_AUDIO_PROTOCOL_UNDEFINED,
-                None,
-            );
-            write_streaming_descriptors(
-                &mut alt24,
-                OUT_USB_TERMINAL_ID,
-                3,
-                24,
-                &SUPPORTED_SAMPLE_RATES,
-            );
-            out_ep24 =
-                alt24.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
-            out_info24 = *out_ep24.info();
-            write_audio_data_endpoint(
-                &mut alt24,
-                &out_info24,
-                MAX_PACKET_SIZE_24,
-                SynchronizationType::Adaptive,
-            );
-            write_class_specific_endpoint(&mut alt24);
-        }
-        {
-            let mut alt32 = out_if.alt_setting(
-                USB_CLASS_AUDIO,
-                USB_SUBCLASS_AUDIO_STREAMING,
-                USB_AUDIO_PROTOCOL_UNDEFINED,
-                None,
-            );
-            write_streaming_descriptors(
-                &mut alt32,
-                OUT_USB_TERMINAL_ID,
-                4,
-                32,
-                &SUPPORTED_SAMPLE_RATES_32,
-            );
-            out_ep32 =
-                alt32.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
-            out_info32 = *out_ep32.info();
-            write_audio_data_endpoint(
-                &mut alt32,
-                &out_info32,
-                MAX_PACKET_SIZE_32,
-                SynchronizationType::Adaptive,
-            );
-            write_class_specific_endpoint(&mut alt32);
-        }
-    }
+    let _alt0 = out_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+
+    let mut alt16 = out_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_streaming_descriptors(
+        &mut alt16,
+        OUT_USB_TERMINAL_ID,
+        2,
+        16,
+        &SUPPORTED_SAMPLE_RATES,
+    );
+    let out_ep16 = alt16.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
+    let out_info16 = *out_ep16.info();
+    write_audio_data_endpoint(
+        &mut alt16,
+        &out_info16,
+        MAX_PACKET_SIZE_16,
+        SynchronizationType::Adaptive,
+    );
+    write_class_specific_endpoint(&mut alt16);
+
+    let mut alt24 = out_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_streaming_descriptors(
+        &mut alt24,
+        OUT_USB_TERMINAL_ID,
+        3,
+        24,
+        &SUPPORTED_SAMPLE_RATES,
+    );
+    let out_ep24 = alt24.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
+    let out_info24 = *out_ep24.info();
+    write_audio_data_endpoint(
+        &mut alt24,
+        &out_info24,
+        MAX_PACKET_SIZE_24,
+        SynchronizationType::Adaptive,
+    );
+    write_class_specific_endpoint(&mut alt24);
+
+    let mut alt32 = out_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_streaming_descriptors(
+        &mut alt32,
+        OUT_USB_TERMINAL_ID,
+        4,
+        32,
+        &SUPPORTED_SAMPLE_RATES_32,
+    );
+    let out_ep32 = alt32.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
+    let out_info32 = *out_ep32.info();
+    write_audio_data_endpoint(
+        &mut alt32,
+        &out_info32,
+        MAX_PACKET_SIZE_32,
+        SynchronizationType::Adaptive,
+    );
+    write_class_specific_endpoint(&mut alt32);
 
     let mut in_if = function.interface();
     let in_streaming_if = in_if.interface_number();
-    {
-        let _alt0 = in_if.alt_setting(
-            USB_CLASS_AUDIO,
-            USB_SUBCLASS_AUDIO_STREAMING,
-            USB_AUDIO_PROTOCOL_UNDEFINED,
-            None,
-        );
-    }
+    let _alt0 = in_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
 
-    let in_ep16;
-    let in_ep24;
-    let in_ep32;
-    let in_info16;
-    let in_info24;
-    let in_info32;
-    {
-        let mut alt16 = in_if.alt_setting(
-            USB_CLASS_AUDIO,
-            USB_SUBCLASS_AUDIO_STREAMING,
-            USB_AUDIO_PROTOCOL_UNDEFINED,
-            None,
-        );
-        write_streaming_descriptors(
-            &mut alt16,
-            IN_USB_TERMINAL_ID,
-            2,
-            16,
-            &SUPPORTED_SAMPLE_RATES,
-        );
-        in_ep16 = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
-        in_info16 = *in_ep16.info();
-        write_audio_data_endpoint(
-            &mut alt16,
-            &in_info16,
-            MAX_PACKET_SIZE_16,
-            SynchronizationType::Asynchronous,
-        );
-        write_class_specific_endpoint(&mut alt16);
-    }
-    {
-        let mut alt24 = in_if.alt_setting(
-            USB_CLASS_AUDIO,
-            USB_SUBCLASS_AUDIO_STREAMING,
-            USB_AUDIO_PROTOCOL_UNDEFINED,
-            None,
-        );
-        write_streaming_descriptors(
-            &mut alt24,
-            IN_USB_TERMINAL_ID,
-            3,
-            24,
-            &SUPPORTED_SAMPLE_RATES,
-        );
-        in_ep24 = alt24.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
-        in_info24 = *in_ep24.info();
-        write_audio_data_endpoint(
-            &mut alt24,
-            &in_info24,
-            MAX_PACKET_SIZE_24,
-            SynchronizationType::Asynchronous,
-        );
-        write_class_specific_endpoint(&mut alt24);
-    }
-    {
-        let mut alt32 = in_if.alt_setting(
-            USB_CLASS_AUDIO,
-            USB_SUBCLASS_AUDIO_STREAMING,
-            USB_AUDIO_PROTOCOL_UNDEFINED,
-            None,
-        );
-        write_streaming_descriptors(
-            &mut alt32,
-            IN_USB_TERMINAL_ID,
-            4,
-            32,
-            &SUPPORTED_SAMPLE_RATES_32,
-        );
-        in_ep32 = alt32.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
-        in_info32 = *in_ep32.info();
-        write_audio_data_endpoint(
-            &mut alt32,
-            &in_info32,
-            MAX_PACKET_SIZE_32,
-            SynchronizationType::Asynchronous,
-        );
-        write_class_specific_endpoint(&mut alt32);
-    }
+    let mut alt16 = in_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_streaming_descriptors(
+        &mut alt16,
+        IN_USB_TERMINAL_ID,
+        2,
+        16,
+        &SUPPORTED_SAMPLE_RATES,
+    );
+    let in_ep16 = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
+    let in_info16 = *in_ep16.info();
+    write_audio_data_endpoint(
+        &mut alt16,
+        &in_info16,
+        MAX_PACKET_SIZE_16,
+        SynchronizationType::Asynchronous,
+    );
+    write_class_specific_endpoint(&mut alt16);
+
+    let mut alt24 = in_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_streaming_descriptors(
+        &mut alt24,
+        IN_USB_TERMINAL_ID,
+        3,
+        24,
+        &SUPPORTED_SAMPLE_RATES,
+    );
+    let in_ep24 = alt24.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
+    let in_info24 = *in_ep24.info();
+    write_audio_data_endpoint(
+        &mut alt24,
+        &in_info24,
+        MAX_PACKET_SIZE_24,
+        SynchronizationType::Asynchronous,
+    );
+    write_class_specific_endpoint(&mut alt24);
+
+    let mut alt32 = in_if.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+    write_streaming_descriptors(
+        &mut alt32,
+        IN_USB_TERMINAL_ID,
+        4,
+        32,
+        &SUPPORTED_SAMPLE_RATES_32,
+    );
+    let in_ep32 = alt32.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
+    let in_info32 = *in_ep32.info();
+    write_audio_data_endpoint(
+        &mut alt32,
+        &in_info32,
+        MAX_PACKET_SIZE_32,
+        SynchronizationType::Asynchronous,
+    );
+    write_class_specific_endpoint(&mut alt32);
 
     AudioEndpoints {
         out_ep16,

@@ -79,7 +79,9 @@ pub async fn in_task<'d, D: Driver<'d>>(
             let format_matches = formats.loopback_format_matches();
             let mut fallback_reason = None;
             let loopback_packet = if format_matches {
-                if let Ok(packet) = packets.try_receive() { Some(packet) } else {
+                if let Ok(packet) = packets.try_receive() {
+                    Some(packet)
+                } else {
                     diag::add_in_queue_empty();
                     fallback_reason = Some(InFallbackReason::QueueEmpty);
                     None
