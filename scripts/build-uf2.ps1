@@ -1,6 +1,7 @@
 param(
     [ValidateSet("debug", "release")]
-    [string]$Profile = "release",
+    [Alias("Profile")]
+    [string]$BuildProfile = "release",
 
     [string[]]$Features = @(),
 
@@ -23,7 +24,7 @@ if (-not $Elf2Uf2) {
 }
 
 $BuildArgs = @("build", "--bin", $BinName, "--target", $Target)
-if ($Profile -eq "release") {
+if ($BuildProfile -eq "release") {
     $BuildArgs += "--release"
 }
 if ($NoDefaultFeatures) {
@@ -40,14 +41,14 @@ try {
         exit $LASTEXITCODE
     }
 
-    $ProfileDir = if ($Profile -eq "release") { "release" } else { "debug" }
+    $ProfileDir = if ($BuildProfile -eq "release") { "release" } else { "debug" }
     $ElfPath = Join-Path $RepoRoot "target\$Target\$ProfileDir\$BinName"
     if (-not (Test-Path $ElfPath)) {
         throw "ELF output was not found: $ElfPath"
     }
 
     if ([string]::IsNullOrWhiteSpace($Output)) {
-        $Suffix = if ($Profile -eq "release") { "" } else { "-$Profile" }
+        $Suffix = if ($BuildProfile -eq "release") { "" } else { "-$BuildProfile" }
         $Output = "target\uf2\$BinName$Suffix.uf2"
     }
 
