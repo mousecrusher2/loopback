@@ -1,6 +1,5 @@
 #![no_std]
 #![cfg_attr(test, no_main)]
-#![cfg_attr(test, allow(dead_code, unused_imports))]
 
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
@@ -26,7 +25,8 @@ use tasks::{PacketQueue, in_task, out_task};
 static AUDIO_STATE: AudioState = AudioState::new();
 static PACKETS: PacketQueue = PacketQueue::new();
 
-pub async fn lib_main(spawner: Spawner) {
+#[allow(clippy::missing_panics_doc)]
+pub fn lib_main(spawner: Spawner) {
     let p = embassy_rp::init(embassy_rp::config::Config::default());
     let driver = usb_driver(p.USB);
 
@@ -80,14 +80,14 @@ pub async fn lib_main(spawner: Spawner) {
     };
     builder.handler(handler);
 
-    spawner.spawn(usb_task(builder.build()).expect("USB task pool exhausted"));
-    spawner.spawn(out_endpoint_task(endpoints.out_ep16).expect("OUT task pool exhausted"));
-    spawner.spawn(out_endpoint_task(endpoints.out_ep24).expect("OUT task pool exhausted"));
-    spawner.spawn(out_endpoint_task(endpoints.out_ep32).expect("OUT task pool exhausted"));
-    spawner.spawn(in_endpoint_task(endpoints.in_ep16).expect("IN task pool exhausted"));
-    spawner.spawn(in_endpoint_task(endpoints.in_ep24).expect("IN task pool exhausted"));
-    spawner.spawn(in_endpoint_task(endpoints.in_ep32).expect("IN task pool exhausted"));
-    spawner.spawn(fallback_led_task(p.PIN_25).expect("fallback LED task pool exhausted"));
+    spawner.spawn(usb_task(builder.build()).unwrap());
+    spawner.spawn(out_endpoint_task(endpoints.out_ep16).unwrap());
+    spawner.spawn(out_endpoint_task(endpoints.out_ep24).unwrap());
+    spawner.spawn(out_endpoint_task(endpoints.out_ep32).unwrap());
+    spawner.spawn(in_endpoint_task(endpoints.in_ep16).unwrap());
+    spawner.spawn(in_endpoint_task(endpoints.in_ep24).unwrap());
+    spawner.spawn(in_endpoint_task(endpoints.in_ep32).unwrap());
+    spawner.spawn(fallback_led_task(p.PIN_25).unwrap());
 }
 
 #[embassy_executor::task]
