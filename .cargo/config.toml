@@ -1,10 +1,6 @@
 [build]
 target = "thumbv8m.main-none-eabihf"
 
-[alias]
-loopback-check = "run --target x86_64-pc-windows-msvc --manifest-path tools/loopback-check/Cargo.toml"
-loopback-check-build = "build --target x86_64-pc-windows-msvc --manifest-path tools/loopback-check/Cargo.toml"
-
 [target.thumbv8m.main-none-eabihf]
 runner = "probe-rs run --chip RP235x"
 rustflags = [
