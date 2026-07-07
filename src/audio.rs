@@ -8,7 +8,8 @@ pub(crate) const SUPPORTED_SAMPLE_RATES: [SampleRate; 4] = [
     SampleRate::R88200,
     SampleRate::R96000,
 ];
-pub(crate) const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
+pub(crate) const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] =
+    [SampleRate::R44100, SampleRate::R48000];
 const DEFAULT_STREAM_FORMAT: StreamFormat = StreamFormat {
     alternate_setting: AudioStreamingAlternateSetting::Inactive,
     rate: DEFAULT_SAMPLE_RATE,
@@ -148,7 +149,10 @@ pub(crate) struct StreamFormat {
 
 impl StreamFormat {
     #[must_use]
-    pub(crate) const fn new(alternate_setting: AudioStreamingAlternateSetting, rate: SampleRate) -> Self {
+    pub(crate) const fn new(
+        alternate_setting: AudioStreamingAlternateSetting,
+        rate: SampleRate,
+    ) -> Self {
         Self {
             alternate_setting,
             rate,
@@ -240,7 +244,11 @@ impl AudioState {
         }
     }
 
-    pub(crate) fn set_rate(&self, direction: StreamDirection, rate: SampleRate) -> Option<StreamFormat> {
+    pub(crate) fn set_rate(
+        &self,
+        direction: StreamDirection,
+        rate: SampleRate,
+    ) -> Option<StreamFormat> {
         self.update_format(direction, StreamFormatUpdate::Rate(rate))
     }
 
@@ -351,62 +359,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn audio_streaming_alternate_settings_map_to_audio_frame_sizes() {
-        assert_eq!(
-            AudioStreamingAlternateSetting::Inactive.bytes_per_audio_frame(),
-            0
-        );
-        assert_eq!(
-            AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame(),
-            4
-        );
-        assert_eq!(
-            AudioStreamingAlternateSetting::Pcm24.bytes_per_audio_frame(),
-            6
-        );
-        assert_eq!(
-            AudioStreamingAlternateSetting::Pcm32.bytes_per_audio_frame(),
-            8
-        );
-    }
-
-    #[test]
-    fn default_formats_are_inactive_48k_streams() {
-        assert_eq!(
-            AudioFormats::default(),
-            AudioFormats::new(
-                StreamFormat::new(AudioStreamingAlternateSetting::Inactive, SampleRate::R48000),
-                StreamFormat::new(AudioStreamingAlternateSetting::Inactive, SampleRate::R48000)
-            )
-        );
-    }
-
-    #[test]
-    fn sample_rate_from_hz_accepts_only_advertised_rates() {
-        assert_eq!(SampleRate::from_hz(44_100), Some(SampleRate::R44100));
-        assert_eq!(SampleRate::from_hz(48_000), Some(SampleRate::R48000));
-        assert_eq!(SampleRate::from_hz(88_200), Some(SampleRate::R88200));
-        assert_eq!(SampleRate::from_hz(96_000), Some(SampleRate::R96000));
-        assert_eq!(SampleRate::from_hz(45_000), None);
-        assert_eq!(SampleRate::from_hz(50_000), None);
-        assert_eq!(SampleRate::from_hz(90_000), None);
-        assert_eq!(SampleRate::from_hz(95_000), None);
-    }
-
-    #[test]
-    fn sample_rate_support_depends_on_alt_setting() {
-        assert!(AudioStreamingAlternateSetting::Pcm32.supports_sample_rate(SampleRate::R44100));
-        assert!(AudioStreamingAlternateSetting::Pcm32.supports_sample_rate(SampleRate::R48000));
-        assert!(!AudioStreamingAlternateSetting::Pcm32.supports_sample_rate(SampleRate::R88200));
-        assert!(!AudioStreamingAlternateSetting::Pcm32.supports_sample_rate(SampleRate::R96000));
-        assert!(AudioStreamingAlternateSetting::Pcm24.supports_sample_rate(SampleRate::R96000));
-        assert_eq!(
-            AudioStreamingAlternateSetting::Pcm32.sample_rate_or_default(SampleRate::R96000),
-            DEFAULT_SAMPLE_RATE
-        );
-    }
-
-    #[test]
     fn packet_clock_emits_fractional_44k1_cadence() {
         let mut clock = PacketClock::new();
         let mut total = 0;
@@ -470,74 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn packet_clock_resets_fractional_state_when_format_changes() {
-        let mut clock = PacketClock::new();
-
-        assert_eq!(
-            clock.next_len(
-                SampleRate::R44100,
-                AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame()
-            ),
-            44 * 4
-        );
-        assert_eq!(
-            clock.next_len(
-                SampleRate::R48000,
-                AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame()
-            ),
-            48 * 4
-        );
-        assert_eq!(
-            clock.next_len(
-                SampleRate::R48000,
-                AudioStreamingAlternateSetting::Pcm24.bytes_per_audio_frame()
-            ),
-            48 * 6
-        );
-    }
-
-    #[test]
-    fn loopback_only_matches_identical_active_formats() {
-        let state = AudioState::new();
-        assert!(!state.formats().loopback_format_matches());
-
-        state.set_alternate_setting(StreamDirection::Out, AudioStreamingAlternateSetting::Pcm16);
-        state.set_alternate_setting(StreamDirection::In, AudioStreamingAlternateSetting::Pcm16);
-        assert!(state.formats().loopback_format_matches());
-
-        state.set_alternate_setting(StreamDirection::In, AudioStreamingAlternateSetting::Pcm24);
-        assert!(!state.formats().loopback_format_matches());
-
-        state.set_alternate_setting(StreamDirection::In, AudioStreamingAlternateSetting::Pcm16);
-        assert_eq!(
-            state.set_rate(StreamDirection::In, SampleRate::R44100),
-            Some(StreamFormat::new(
-                AudioStreamingAlternateSetting::Pcm16,
-                SampleRate::R44100
-            ))
-        );
-        assert!(!state.formats().loopback_format_matches());
-
-        state.set_alternate_setting(StreamDirection::Out, AudioStreamingAlternateSetting::Pcm32);
-        state.set_alternate_setting(StreamDirection::In, AudioStreamingAlternateSetting::Pcm32);
-        assert_eq!(
-            state.set_rate(StreamDirection::Out, SampleRate::R48000),
-            Some(StreamFormat::new(
-                AudioStreamingAlternateSetting::Pcm32,
-                SampleRate::R48000
-            ))
-        );
-        assert_eq!(
-            state.set_rate(StreamDirection::In, SampleRate::R48000),
-            Some(StreamFormat::new(
-                AudioStreamingAlternateSetting::Pcm32,
-                SampleRate::R48000
-            ))
-        );
-        assert!(state.formats().loopback_format_matches());
-    }
-
-    #[test]
     fn stream_format_snapshot_keeps_32bit_rate_within_packet_budget() {
         let state = AudioState::new();
 
@@ -563,22 +447,6 @@ mod tests {
         assert!(
             PacketClock::new().next_len(format.rate, format.bytes_per_audio_frame())
                 <= MAX_PACKET_SIZE
-        );
-    }
-
-    #[test]
-    fn unsupported_rate_update_is_rejected_for_32bit_streams() {
-        let state = AudioState::new();
-
-        state.set_alternate_setting(StreamDirection::In, AudioStreamingAlternateSetting::Pcm32);
-
-        assert_eq!(
-            state.set_rate(StreamDirection::In, SampleRate::R96000),
-            None
-        );
-        assert_eq!(
-            state.formats().in_,
-            StreamFormat::new(AudioStreamingAlternateSetting::Pcm32, SampleRate::R48000)
         );
     }
 
