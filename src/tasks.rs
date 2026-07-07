@@ -6,10 +6,10 @@ use heapless::Vec;
 use crate::audio::{AudioState, MAX_PACKET_SIZE, PACKET_QUEUE_SIZE, PacketClock};
 use crate::diag::{self, InFallbackReason};
 
-pub type AudioPacket = Vec<u8, MAX_PACKET_SIZE>;
-pub type PacketQueue = Channel<CriticalSectionRawMutex, AudioPacket, PACKET_QUEUE_SIZE>;
+pub(crate) type AudioPacket = Vec<u8, MAX_PACKET_SIZE>;
+pub(crate) type PacketQueue = Channel<CriticalSectionRawMutex, AudioPacket, PACKET_QUEUE_SIZE>;
 
-pub async fn out_task<'d, D: Driver<'d>>(
+pub(crate) async fn out_task<'d, D: Driver<'d>>(
     mut ep: D::EndpointOut,
     state: &'static AudioState,
     packets: &'static PacketQueue,
@@ -54,7 +54,7 @@ fn enqueue_packet(packets: &PacketQueue, packet: &[u8]) -> Result<(), ()> {
     packets.try_send(owned).map_err(|_| ())
 }
 
-pub async fn in_task<'d, D: Driver<'d>>(
+pub(crate) async fn in_task<'d, D: Driver<'d>>(
     mut ep: D::EndpointIn,
     state: &'static AudioState,
     packets: &'static PacketQueue,

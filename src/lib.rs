@@ -9,12 +9,12 @@ use embassy_usb as usb;
 use static_cell::StaticCell;
 use usb::driver::Driver;
 
-pub mod audio;
-pub mod control;
-pub mod descriptors;
-pub mod diag;
-pub mod irq;
-pub mod tasks;
+mod audio;
+mod control;
+mod descriptors;
+mod diag;
+mod irq;
+mod tasks;
 
 use audio::AudioState;
 use control::AudioControlHandler;

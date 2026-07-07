@@ -11,7 +11,7 @@ const GET_MAX: u8 = 0x83;
 const GET_RES: u8 = 0x84;
 const SAMPLING_FREQ_CONTROL: u8 = 0x01;
 
-pub struct AudioControlHandler {
+pub(crate) struct AudioControlHandler {
     state: &'static AudioState,
     packets: &'static PacketQueue,
     out_streaming_if: InterfaceNumber,
@@ -21,7 +21,7 @@ pub struct AudioControlHandler {
 }
 
 impl AudioControlHandler {
-    pub fn new(
+    pub(crate) fn new(
         state: &'static AudioState,
         packets: &'static PacketQueue,
         out_streaming_if: InterfaceNumber,

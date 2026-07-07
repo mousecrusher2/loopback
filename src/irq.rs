@@ -4,9 +4,9 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<peripherals::USB>;
 });
 
-pub type UsbDriver = usb::Driver<'static, peripherals::USB>;
+pub(crate) type UsbDriver = usb::Driver<'static, peripherals::USB>;
 
 #[must_use]
-pub fn usb_driver(usb_peripheral: Peri<'static, peripherals::USB>) -> UsbDriver {
+pub(crate) fn usb_driver(usb_peripheral: Peri<'static, peripherals::USB>) -> UsbDriver {
     usb::Driver::new(usb_peripheral, Irqs)
 }

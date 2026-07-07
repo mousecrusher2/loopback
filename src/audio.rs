@@ -1,14 +1,14 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
-pub const CHANNEL_COUNT: u8 = 2;
-pub const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
-pub const SUPPORTED_SAMPLE_RATES: [SampleRate; 4] = [
+pub(crate) const CHANNEL_COUNT: u8 = 2;
+pub(crate) const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
+pub(crate) const SUPPORTED_SAMPLE_RATES: [SampleRate; 4] = [
     SampleRate::R44100,
     SampleRate::R48000,
     SampleRate::R88200,
     SampleRate::R96000,
 ];
-pub const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
+pub(crate) const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
 const DEFAULT_STREAM_FORMAT: StreamFormat = StreamFormat {
     alternate_setting: AudioStreamingAlternateSetting::Inactive,
     rate: DEFAULT_SAMPLE_RATE,
@@ -17,21 +17,21 @@ const DEFAULT_AUDIO_FORMATS: AudioFormats = AudioFormats {
     out: DEFAULT_STREAM_FORMAT,
     in_: DEFAULT_STREAM_FORMAT,
 };
-pub const MAX_PACKET_SIZE_16: u16 = 97 * CHANNEL_COUNT as u16 * 2;
-pub const MAX_PACKET_SIZE_24: u16 = 97 * CHANNEL_COUNT as u16 * 3;
-pub const MAX_PACKET_SIZE_32: u16 = 49 * CHANNEL_COUNT as u16 * 4;
-pub const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24 as usize;
-pub const PACKET_QUEUE_SIZE: usize = 16;
+pub(crate) const MAX_PACKET_SIZE_16: u16 = 97 * CHANNEL_COUNT as u16 * 2;
+pub(crate) const MAX_PACKET_SIZE_24: u16 = 97 * CHANNEL_COUNT as u16 * 3;
+pub(crate) const MAX_PACKET_SIZE_32: u16 = 49 * CHANNEL_COUNT as u16 * 4;
+pub(crate) const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24 as usize;
+pub(crate) const PACKET_QUEUE_SIZE: usize = 16;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum StreamDirection {
+pub(crate) enum StreamDirection {
     Out,
     In,
 }
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AudioStreamingAlternateSetting {
+pub(crate) enum AudioStreamingAlternateSetting {
     #[default]
     Inactive = 0,
     Pcm16 = 1,
@@ -41,7 +41,7 @@ pub enum AudioStreamingAlternateSetting {
 
 impl AudioStreamingAlternateSetting {
     #[must_use]
-    pub const fn from_number(number: u8) -> Option<Self> {
+    pub(crate) const fn from_number(number: u8) -> Option<Self> {
         match number {
             0 => Some(Self::Inactive),
             1 => Some(Self::Pcm16),
@@ -52,12 +52,12 @@ impl AudioStreamingAlternateSetting {
     }
 
     #[must_use]
-    pub const fn number(self) -> u8 {
+    pub(crate) const fn number(self) -> u8 {
         self as u8
     }
 
     #[must_use]
-    pub const fn bytes_per_audio_frame(self) -> usize {
+    pub(crate) const fn bytes_per_audio_frame(self) -> usize {
         match self {
             Self::Inactive => 0,
             Self::Pcm16 => CHANNEL_COUNT as usize * 2,
@@ -67,7 +67,7 @@ impl AudioStreamingAlternateSetting {
     }
 
     #[must_use]
-    pub const fn supports_sample_rate(self, rate: SampleRate) -> bool {
+    pub(crate) const fn supports_sample_rate(self, rate: SampleRate) -> bool {
         match self {
             Self::Inactive | Self::Pcm16 | Self::Pcm24 => true,
             Self::Pcm32 => matches!(rate, SampleRate::R44100 | SampleRate::R48000),
@@ -75,7 +75,7 @@ impl AudioStreamingAlternateSetting {
     }
 
     #[must_use]
-    pub const fn sample_rate_or_default(self, rate: SampleRate) -> SampleRate {
+    pub(crate) const fn sample_rate_or_default(self, rate: SampleRate) -> SampleRate {
         if self.supports_sample_rate(rate) {
             rate
         } else {
@@ -95,7 +95,7 @@ impl AudioStreamingAlternateSetting {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum SampleRate {
+pub(crate) enum SampleRate {
     R44100 = 0,
     #[default]
     R48000 = 1,
@@ -105,7 +105,7 @@ pub enum SampleRate {
 
 impl SampleRate {
     #[must_use]
-    pub const fn hz(self) -> u32 {
+    pub(crate) const fn hz(self) -> u32 {
         match self {
             Self::R44100 => 44_100,
             Self::R48000 => 48_000,
@@ -115,7 +115,7 @@ impl SampleRate {
     }
 
     #[must_use]
-    pub const fn from_hz(rate_hz: u32) -> Option<Self> {
+    pub(crate) const fn from_hz(rate_hz: u32) -> Option<Self> {
         match rate_hz {
             44_100 => Some(Self::R44100),
             48_000 => Some(Self::R48000),
@@ -141,14 +141,14 @@ impl SampleRate {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct StreamFormat {
-    pub alternate_setting: AudioStreamingAlternateSetting,
-    pub rate: SampleRate,
+pub(crate) struct StreamFormat {
+    pub(crate) alternate_setting: AudioStreamingAlternateSetting,
+    pub(crate) rate: SampleRate,
 }
 
 impl StreamFormat {
     #[must_use]
-    pub const fn new(alternate_setting: AudioStreamingAlternateSetting, rate: SampleRate) -> Self {
+    pub(crate) const fn new(alternate_setting: AudioStreamingAlternateSetting, rate: SampleRate) -> Self {
         Self {
             alternate_setting,
             rate,
@@ -156,7 +156,7 @@ impl StreamFormat {
     }
 
     #[must_use]
-    pub fn bytes_per_audio_frame(self) -> usize {
+    pub(crate) fn bytes_per_audio_frame(self) -> usize {
         self.alternate_setting.bytes_per_audio_frame()
     }
 
@@ -173,19 +173,19 @@ impl StreamFormat {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct AudioFormats {
-    pub out: StreamFormat,
-    pub in_: StreamFormat,
+pub(crate) struct AudioFormats {
+    pub(crate) out: StreamFormat,
+    pub(crate) in_: StreamFormat,
 }
 
 impl AudioFormats {
     #[must_use]
-    pub const fn new(out: StreamFormat, in_: StreamFormat) -> Self {
+    pub(crate) const fn new(out: StreamFormat, in_: StreamFormat) -> Self {
         Self { out, in_ }
     }
 
     #[must_use]
-    pub fn loopback_format_matches(self) -> bool {
+    pub(crate) fn loopback_format_matches(self) -> bool {
         self.out.alternate_setting != AudioStreamingAlternateSetting::Inactive
             && self.out.alternate_setting == self.in_.alternate_setting
             && self.out.rate == self.in_.rate
@@ -203,7 +203,7 @@ impl AudioFormats {
     }
 }
 
-pub struct AudioState {
+pub(crate) struct AudioState {
     formats: AtomicU32,
 }
 
@@ -215,18 +215,18 @@ enum StreamFormatUpdate {
 
 impl AudioState {
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             formats: AtomicU32::new(DEFAULT_AUDIO_FORMATS.encode()),
         }
     }
 
-    pub fn reset(&self) {
+    pub(crate) fn reset(&self) {
         self.formats
             .store(AudioFormats::default().encode(), Ordering::Relaxed);
     }
 
-    pub fn set_alternate_setting(
+    pub(crate) fn set_alternate_setting(
         &self,
         direction: StreamDirection,
         alternate_setting: AudioStreamingAlternateSetting,
@@ -240,11 +240,11 @@ impl AudioState {
         }
     }
 
-    pub fn set_rate(&self, direction: StreamDirection, rate: SampleRate) -> Option<StreamFormat> {
+    pub(crate) fn set_rate(&self, direction: StreamDirection, rate: SampleRate) -> Option<StreamFormat> {
         self.update_format(direction, StreamFormatUpdate::Rate(rate))
     }
 
-    pub fn formats(&self) -> AudioFormats {
+    pub(crate) fn formats(&self) -> AudioFormats {
         AudioFormats::decode(self.formats.load(Ordering::Relaxed))
     }
 
@@ -307,7 +307,7 @@ fn apply_stream_format_update(
     Some((formats, next_format))
 }
 
-pub struct PacketClock {
+pub(crate) struct PacketClock {
     rate: SampleRate,
     bytes_per_audio_frame: usize,
     accumulator: u32,
@@ -315,7 +315,7 @@ pub struct PacketClock {
 
 impl PacketClock {
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             rate: DEFAULT_SAMPLE_RATE,
             bytes_per_audio_frame: 0,
@@ -323,7 +323,7 @@ impl PacketClock {
         }
     }
 
-    pub fn next_len(&mut self, rate: SampleRate, bytes_per_audio_frame: usize) -> usize {
+    pub(crate) fn next_len(&mut self, rate: SampleRate, bytes_per_audio_frame: usize) -> usize {
         if self.rate != rate || self.bytes_per_audio_frame != bytes_per_audio_frame {
             self.rate = rate;
             self.bytes_per_audio_frame = bytes_per_audio_frame;

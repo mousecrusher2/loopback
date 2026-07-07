@@ -35,20 +35,20 @@ const OUT_SPEAKER_TERMINAL_ID: u8 = 2;
 const IN_MIC_TERMINAL_ID: u8 = 3;
 const IN_USB_TERMINAL_ID: u8 = 4;
 
-pub struct AudioEndpoints<'d, D: Driver<'d>> {
-    pub out_ep16: D::EndpointOut,
-    pub out_ep24: D::EndpointOut,
-    pub out_ep32: D::EndpointOut,
-    pub in_ep16: D::EndpointIn,
-    pub in_ep24: D::EndpointIn,
-    pub in_ep32: D::EndpointIn,
-    pub out_streaming_if: InterfaceNumber,
-    pub in_streaming_if: InterfaceNumber,
-    pub out_ep_addrs: [u8; 3],
-    pub in_ep_addrs: [u8; 3],
+pub(crate) struct AudioEndpoints<'d, D: Driver<'d>> {
+    pub(crate) out_ep16: D::EndpointOut,
+    pub(crate) out_ep24: D::EndpointOut,
+    pub(crate) out_ep32: D::EndpointOut,
+    pub(crate) in_ep16: D::EndpointIn,
+    pub(crate) in_ep24: D::EndpointIn,
+    pub(crate) in_ep32: D::EndpointIn,
+    pub(crate) out_streaming_if: InterfaceNumber,
+    pub(crate) in_streaming_if: InterfaceNumber,
+    pub(crate) out_ep_addrs: [u8; 3],
+    pub(crate) in_ep_addrs: [u8; 3],
 }
 
-pub fn build_audio_function<'d, D: Driver<'d>>(
+pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
     builder: &mut Builder<'d, D>,
 ) -> AudioEndpoints<'d, D> {
     let mut function = builder.function(
