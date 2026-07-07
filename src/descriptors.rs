@@ -4,8 +4,7 @@ use embassy_usb::types::InterfaceNumber;
 use embassy_usb::{Builder, InterfaceAltBuilder};
 
 use crate::audio::{
-    CHANNEL_COUNT, MAX_PACKET_SIZE_16, MAX_PACKET_SIZE_24, MAX_PACKET_SIZE_32,
-    SUPPORTED_SAMPLE_RATES, SUPPORTED_SAMPLE_RATES_32, SampleRate,
+    BitDepth, CHANNEL_COUNT, bit_resolution, subframe_size, supported_sample_rates,
 };
 
 const USB_CLASS_AUDIO: u8 = 0x01;
@@ -85,19 +84,15 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_streaming_descriptors(
-        &mut alt16,
-        OUT_USB_TERMINAL_ID,
-        2,
-        16,
-        &SUPPORTED_SAMPLE_RATES,
-    );
-    let out_ep16 = alt16.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
+    let bit_depth = BitDepth::Pcm16;
+    let packet_size = max_packet_size(bit_depth);
+    write_streaming_descriptors(&mut alt16, OUT_USB_TERMINAL_ID, bit_depth);
+    let out_ep16 = alt16.alloc_endpoint_out(EndpointType::Isochronous, None, packet_size, 1);
     let out_info16 = *out_ep16.info();
     write_audio_data_endpoint(
         &mut alt16,
         &out_info16,
-        MAX_PACKET_SIZE_16,
+        packet_size,
         SynchronizationType::Adaptive,
     );
     write_class_specific_endpoint(&mut alt16);
@@ -108,19 +103,15 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_streaming_descriptors(
-        &mut alt24,
-        OUT_USB_TERMINAL_ID,
-        3,
-        24,
-        &SUPPORTED_SAMPLE_RATES,
-    );
-    let out_ep24 = alt24.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
+    let bit_depth = BitDepth::Pcm24;
+    let packet_size = max_packet_size(bit_depth);
+    write_streaming_descriptors(&mut alt24, OUT_USB_TERMINAL_ID, bit_depth);
+    let out_ep24 = alt24.alloc_endpoint_out(EndpointType::Isochronous, None, packet_size, 1);
     let out_info24 = *out_ep24.info();
     write_audio_data_endpoint(
         &mut alt24,
         &out_info24,
-        MAX_PACKET_SIZE_24,
+        packet_size,
         SynchronizationType::Adaptive,
     );
     write_class_specific_endpoint(&mut alt24);
@@ -131,19 +122,15 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_streaming_descriptors(
-        &mut alt32,
-        OUT_USB_TERMINAL_ID,
-        4,
-        32,
-        &SUPPORTED_SAMPLE_RATES_32,
-    );
-    let out_ep32 = alt32.alloc_endpoint_out(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
+    let bit_depth = BitDepth::Pcm32;
+    let packet_size = max_packet_size(bit_depth);
+    write_streaming_descriptors(&mut alt32, OUT_USB_TERMINAL_ID, bit_depth);
+    let out_ep32 = alt32.alloc_endpoint_out(EndpointType::Isochronous, None, packet_size, 1);
     let out_info32 = *out_ep32.info();
     write_audio_data_endpoint(
         &mut alt32,
         &out_info32,
-        MAX_PACKET_SIZE_32,
+        packet_size,
         SynchronizationType::Adaptive,
     );
     write_class_specific_endpoint(&mut alt32);
@@ -163,19 +150,15 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_streaming_descriptors(
-        &mut alt16,
-        IN_USB_TERMINAL_ID,
-        2,
-        16,
-        &SUPPORTED_SAMPLE_RATES,
-    );
-    let in_ep16 = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_16, 1);
+    let bit_depth = BitDepth::Pcm16;
+    let packet_size = max_packet_size(bit_depth);
+    write_streaming_descriptors(&mut alt16, IN_USB_TERMINAL_ID, bit_depth);
+    let in_ep16 = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, packet_size, 1);
     let in_info16 = *in_ep16.info();
     write_audio_data_endpoint(
         &mut alt16,
         &in_info16,
-        MAX_PACKET_SIZE_16,
+        packet_size,
         SynchronizationType::Asynchronous,
     );
     write_class_specific_endpoint(&mut alt16);
@@ -186,19 +169,15 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_streaming_descriptors(
-        &mut alt24,
-        IN_USB_TERMINAL_ID,
-        3,
-        24,
-        &SUPPORTED_SAMPLE_RATES,
-    );
-    let in_ep24 = alt24.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_24, 1);
+    let bit_depth = BitDepth::Pcm24;
+    let packet_size = max_packet_size(bit_depth);
+    write_streaming_descriptors(&mut alt24, IN_USB_TERMINAL_ID, bit_depth);
+    let in_ep24 = alt24.alloc_endpoint_in(EndpointType::Isochronous, None, packet_size, 1);
     let in_info24 = *in_ep24.info();
     write_audio_data_endpoint(
         &mut alt24,
         &in_info24,
-        MAX_PACKET_SIZE_24,
+        packet_size,
         SynchronizationType::Asynchronous,
     );
     write_class_specific_endpoint(&mut alt24);
@@ -209,19 +188,15 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_streaming_descriptors(
-        &mut alt32,
-        IN_USB_TERMINAL_ID,
-        4,
-        32,
-        &SUPPORTED_SAMPLE_RATES_32,
-    );
-    let in_ep32 = alt32.alloc_endpoint_in(EndpointType::Isochronous, None, MAX_PACKET_SIZE_32, 1);
+    let bit_depth = BitDepth::Pcm32;
+    let packet_size = max_packet_size(bit_depth);
+    write_streaming_descriptors(&mut alt32, IN_USB_TERMINAL_ID, bit_depth);
+    let in_ep32 = alt32.alloc_endpoint_in(EndpointType::Isochronous, None, packet_size, 1);
     let in_info32 = *in_ep32.info();
     write_audio_data_endpoint(
         &mut alt32,
         &in_info32,
-        MAX_PACKET_SIZE_32,
+        packet_size,
         SynchronizationType::Asynchronous,
     );
     write_class_specific_endpoint(&mut alt32);
@@ -350,11 +325,10 @@ fn write_output_terminal<'d, D: Driver<'d>>(
 fn write_streaming_descriptors<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
     terminal_link: u8,
-    subframe_size: u8,
-    bit_resolution: u8,
-    sample_rates: &[SampleRate],
+    bit_depth: BitDepth,
 ) {
     let [lo, hi] = FORMAT_PCM.to_le_bytes();
+    let sample_rates = supported_sample_rates(bit_depth);
 
     alt.descriptor(CS_INTERFACE, &[AS_GENERAL, terminal_link, 0x01, lo, hi]);
 
@@ -362,8 +336,8 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
     format_type[0] = FORMAT_TYPE;
     format_type[1] = FORMAT_TYPE_I;
     format_type[2] = CHANNEL_COUNT;
-    format_type[3] = subframe_size;
-    format_type[4] = bit_resolution;
+    format_type[3] = subframe_size(bit_depth);
+    format_type[4] = bit_resolution(bit_depth);
     format_type[5] = u8::try_from(sample_rates.len()).expect("sample rate count must fit u8");
     let mut offset = 6;
     for rate in sample_rates {
@@ -374,6 +348,15 @@ fn write_streaming_descriptors<'d, D: Driver<'d>>(
         offset += 3;
     }
     alt.descriptor(CS_INTERFACE, &format_type[..offset]);
+}
+
+const fn max_packet_size(bit_depth: BitDepth) -> u16 {
+    match bit_depth {
+        BitDepth::Pcm16 | BitDepth::Pcm24 => {
+            97 * CHANNEL_COUNT as u16 * subframe_size(bit_depth) as u16
+        }
+        BitDepth::Pcm32 => 49 * CHANNEL_COUNT as u16 * subframe_size(bit_depth) as u16,
+    }
 }
 
 fn write_class_specific_endpoint<'d, D: Driver<'d>>(alt: &mut InterfaceAltBuilder<'_, 'd, D>) {

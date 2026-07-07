@@ -1,7 +1,10 @@
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::types::InterfaceNumber;
 
-use crate::audio::{AudioState, AudioStreamingAlternateSetting, SampleRate, StreamDirection};
+use crate::audio::{
+    AudioState, AudioStreamingAlternateSetting, BitDepth, SampleRate, StreamDirection,
+    max_sample_rate, sample_rate_or_default, supports_sample_rate,
+};
 use crate::tasks::PacketQueue;
 
 const SET_CUR: u8 = 0x01;
@@ -39,23 +42,15 @@ impl AudioControlHandler {
         }
     }
 
-    fn endpoint_stream(
-        &self,
-        ep_addr: u8,
-    ) -> Option<(StreamDirection, AudioStreamingAlternateSetting)> {
-        const ALTERNATE_SETTINGS: [AudioStreamingAlternateSetting; 3] = [
-            AudioStreamingAlternateSetting::Pcm16,
-            AudioStreamingAlternateSetting::Pcm24,
-            AudioStreamingAlternateSetting::Pcm32,
-        ];
-
+    fn endpoint_stream(&self, ep_addr: u8) -> Option<(StreamDirection, BitDepth)> {
         if let Some(index) = self.out_ep_addrs.iter().position(|addr| *addr == ep_addr) {
-            Some((StreamDirection::Out, ALTERNATE_SETTINGS[index]))
+            endpoint_index_bit_depth(index).map(|bit_depth| (StreamDirection::Out, bit_depth))
         } else {
             self.in_ep_addrs
                 .iter()
                 .position(|addr| *addr == ep_addr)
-                .map(|index| (StreamDirection::In, ALTERNATE_SETTINGS[index]))
+                .and_then(endpoint_index_bit_depth)
+                .map(|bit_depth| (StreamDirection::In, bit_depth))
         }
     }
 
@@ -67,6 +62,15 @@ impl AudioControlHandler {
         } else {
             None
         }
+    }
+}
+
+fn endpoint_index_bit_depth(index: usize) -> Option<BitDepth> {
+    match index {
+        0 => Some(BitDepth::Pcm16),
+        1 => Some(BitDepth::Pcm24),
+        2 => Some(BitDepth::Pcm32),
+        _ => None,
     }
 }
 
@@ -103,7 +107,7 @@ impl embassy_usb::Handler for AudioControlHandler {
             return None;
         }
 
-        let (direction, alt) = self.endpoint_stream(ep_addr)?;
+        let (direction, bit_depth) = self.endpoint_stream(ep_addr)?;
 
         if data.len() != 3 {
             return Some(OutResponse::Rejected);
@@ -113,7 +117,7 @@ impl embassy_usb::Handler for AudioControlHandler {
         let Some(rate) = SampleRate::from_hz(requested) else {
             return Some(OutResponse::Rejected);
         };
-        if !alt.supports_sample_rate(rate) {
+        if !supports_sample_rate(rate, bit_depth) {
             return Some(OutResponse::Rejected);
         }
 
@@ -135,7 +139,7 @@ impl embassy_usb::Handler for AudioControlHandler {
             return None;
         }
 
-        let (direction, alt) = self.endpoint_stream(ep_addr)?;
+        let (direction, bit_depth) = self.endpoint_stream(ep_addr)?;
 
         let formats = self.state.formats();
         let current_rate = match direction {
@@ -144,10 +148,9 @@ impl embassy_usb::Handler for AudioControlHandler {
         };
 
         let value = match req.request {
-            GET_CUR => alt.sample_rate_or_default(current_rate).hz(),
+            GET_CUR => sample_rate_or_default(current_rate, bit_depth).hz(),
             GET_MIN => SampleRate::R44100.hz(),
-            GET_MAX if alt == AudioStreamingAlternateSetting::Pcm32 => SampleRate::R48000.hz(),
-            GET_MAX => SampleRate::R96000.hz(),
+            GET_MAX => max_sample_rate(bit_depth).hz(),
             GET_RES => 1,
             _ => return Some(InResponse::Rejected),
         };

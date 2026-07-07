@@ -2,14 +2,13 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 pub(crate) const CHANNEL_COUNT: u8 = 2;
 pub(crate) const DEFAULT_SAMPLE_RATE: SampleRate = SampleRate::R48000;
-pub(crate) const SUPPORTED_SAMPLE_RATES: [SampleRate; 4] = [
+const SUPPORTED_SAMPLE_RATES: [SampleRate; 4] = [
     SampleRate::R44100,
     SampleRate::R48000,
     SampleRate::R88200,
     SampleRate::R96000,
 ];
-pub(crate) const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] =
-    [SampleRate::R44100, SampleRate::R48000];
+const SUPPORTED_SAMPLE_RATES_32: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
 const DEFAULT_STREAM_FORMAT: StreamFormat = StreamFormat {
     alternate_setting: AudioStreamingAlternateSetting::Inactive,
     rate: DEFAULT_SAMPLE_RATE,
@@ -18,16 +17,87 @@ const DEFAULT_AUDIO_FORMATS: AudioFormats = AudioFormats {
     out: DEFAULT_STREAM_FORMAT,
     in_: DEFAULT_STREAM_FORMAT,
 };
-pub(crate) const MAX_PACKET_SIZE_16: u16 = 97 * CHANNEL_COUNT as u16 * 2;
-pub(crate) const MAX_PACKET_SIZE_24: u16 = 97 * CHANNEL_COUNT as u16 * 3;
-pub(crate) const MAX_PACKET_SIZE_32: u16 = 49 * CHANNEL_COUNT as u16 * 4;
-pub(crate) const MAX_PACKET_SIZE: usize = MAX_PACKET_SIZE_24 as usize;
 pub(crate) const PACKET_QUEUE_SIZE: usize = 16;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum StreamDirection {
     Out,
     In,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BitDepth {
+    Pcm16,
+    Pcm24,
+    Pcm32,
+}
+
+#[must_use]
+pub(crate) const fn bytes_per_sample(bit_depth: BitDepth) -> usize {
+    match bit_depth {
+        BitDepth::Pcm16 => 2,
+        BitDepth::Pcm24 => 3,
+        BitDepth::Pcm32 => 4,
+    }
+}
+
+#[must_use]
+pub(crate) const fn bytes_per_audio_frame(bit_depth: BitDepth) -> usize {
+    CHANNEL_COUNT as usize * bytes_per_sample(bit_depth)
+}
+
+#[must_use]
+pub(crate) const fn subframe_size(bit_depth: BitDepth) -> u8 {
+    match bit_depth {
+        BitDepth::Pcm16 => 2,
+        BitDepth::Pcm24 => 3,
+        BitDepth::Pcm32 => 4,
+    }
+}
+
+#[must_use]
+pub(crate) const fn bit_resolution(bit_depth: BitDepth) -> u8 {
+    match bit_depth {
+        BitDepth::Pcm16 => 16,
+        BitDepth::Pcm24 => 24,
+        BitDepth::Pcm32 => 32,
+    }
+}
+
+#[must_use]
+pub(crate) const fn supports_sample_rate(rate: SampleRate, bit_depth: BitDepth) -> bool {
+    match bit_depth {
+        BitDepth::Pcm16 | BitDepth::Pcm24 => true,
+        BitDepth::Pcm32 => match rate {
+            SampleRate::R44100 | SampleRate::R48000 => true,
+            SampleRate::R88200 | SampleRate::R96000 => false,
+        },
+    }
+}
+
+#[must_use]
+pub(crate) const fn sample_rate_or_default(rate: SampleRate, bit_depth: BitDepth) -> SampleRate {
+    if supports_sample_rate(rate, bit_depth) {
+        rate
+    } else {
+        DEFAULT_SAMPLE_RATE
+    }
+}
+
+#[must_use]
+pub(crate) const fn max_sample_rate(bit_depth: BitDepth) -> SampleRate {
+    match bit_depth {
+        BitDepth::Pcm16 | BitDepth::Pcm24 => SampleRate::R96000,
+        BitDepth::Pcm32 => SampleRate::R48000,
+    }
+}
+
+#[must_use]
+pub(crate) fn supported_sample_rates(bit_depth: BitDepth) -> &'static [SampleRate] {
+    match bit_depth {
+        BitDepth::Pcm16 | BitDepth::Pcm24 => &SUPPORTED_SAMPLE_RATES,
+        BitDepth::Pcm32 => &SUPPORTED_SAMPLE_RATES_32,
+    }
 }
 
 #[repr(u8)]
@@ -58,29 +128,12 @@ impl AudioStreamingAlternateSetting {
     }
 
     #[must_use]
-    pub(crate) const fn bytes_per_audio_frame(self) -> usize {
+    pub(crate) const fn bit_depth(self) -> Option<BitDepth> {
         match self {
-            Self::Inactive => 0,
-            Self::Pcm16 => CHANNEL_COUNT as usize * 2,
-            Self::Pcm24 => CHANNEL_COUNT as usize * 3,
-            Self::Pcm32 => CHANNEL_COUNT as usize * 4,
-        }
-    }
-
-    #[must_use]
-    pub(crate) const fn supports_sample_rate(self, rate: SampleRate) -> bool {
-        match self {
-            Self::Inactive | Self::Pcm16 | Self::Pcm24 => true,
-            Self::Pcm32 => matches!(rate, SampleRate::R44100 | SampleRate::R48000),
-        }
-    }
-
-    #[must_use]
-    pub(crate) const fn sample_rate_or_default(self, rate: SampleRate) -> SampleRate {
-        if self.supports_sample_rate(rate) {
-            rate
-        } else {
-            DEFAULT_SAMPLE_RATE
+            Self::Inactive => None,
+            Self::Pcm16 => Some(BitDepth::Pcm16),
+            Self::Pcm24 => Some(BitDepth::Pcm24),
+            Self::Pcm32 => Some(BitDepth::Pcm32),
         }
     }
 
@@ -157,11 +210,6 @@ impl StreamFormat {
             alternate_setting,
             rate,
         }
-    }
-
-    #[must_use]
-    pub(crate) fn bytes_per_audio_frame(self) -> usize {
-        self.alternate_setting.bytes_per_audio_frame()
     }
 
     const fn encode(self) -> u32 {
@@ -295,12 +343,17 @@ fn apply_stream_format_update(
         StreamDirection::In => formats.in_,
     };
     let next_format = match update {
-        StreamFormatUpdate::AlternateSetting(alternate_setting) => StreamFormat::new(
-            alternate_setting,
-            alternate_setting.sample_rate_or_default(current.rate),
-        ),
+        StreamFormatUpdate::AlternateSetting(alternate_setting) => {
+            let rate = match alternate_setting.bit_depth() {
+                Some(bit_depth) => sample_rate_or_default(current.rate, bit_depth),
+                None => current.rate,
+            };
+            StreamFormat::new(alternate_setting, rate)
+        }
         StreamFormatUpdate::Rate(rate) => {
-            if !current.alternate_setting.supports_sample_rate(rate) {
+            if let Some(bit_depth) = current.alternate_setting.bit_depth()
+                && !supports_sample_rate(rate, bit_depth)
+            {
                 return None;
             }
             StreamFormat::new(current.alternate_setting, rate)
@@ -364,10 +417,7 @@ mod tests {
         let mut total = 0;
 
         for index in 0..10 {
-            let len = clock.next_len(
-                SampleRate::R44100,
-                AudioStreamingAlternateSetting::Pcm16.bytes_per_audio_frame(),
-            );
+            let len = clock.next_len(SampleRate::R44100, bytes_per_audio_frame(BitDepth::Pcm16));
             total += len;
             if index == 9 {
                 assert_eq!(len, 45 * 4);
@@ -385,10 +435,7 @@ mod tests {
         let mut total = 0;
 
         for index in 0..5 {
-            let len = clock.next_len(
-                SampleRate::R88200,
-                AudioStreamingAlternateSetting::Pcm24.bytes_per_audio_frame(),
-            );
+            let len = clock.next_len(SampleRate::R88200, bytes_per_audio_frame(BitDepth::Pcm24));
             total += len;
             if index == 4 {
                 assert_eq!(len, 89 * 6);
@@ -406,10 +453,7 @@ mod tests {
         let mut total = 0;
 
         for index in 0..10 {
-            let len = clock.next_len(
-                SampleRate::R44100,
-                AudioStreamingAlternateSetting::Pcm32.bytes_per_audio_frame(),
-            );
+            let len = clock.next_len(SampleRate::R44100, bytes_per_audio_frame(BitDepth::Pcm32));
             total += len;
             if index == 9 {
                 assert_eq!(len, 45 * 8);
@@ -445,8 +489,8 @@ mod tests {
         );
         assert_eq!(format.rate, SampleRate::R48000);
         assert!(
-            PacketClock::new().next_len(format.rate, format.bytes_per_audio_frame())
-                <= MAX_PACKET_SIZE
+            PacketClock::new().next_len(format.rate, bytes_per_audio_frame(BitDepth::Pcm32))
+                <= 97 * bytes_per_audio_frame(BitDepth::Pcm24)
         );
     }
 

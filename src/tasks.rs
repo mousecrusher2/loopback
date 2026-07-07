@@ -3,8 +3,10 @@ use embassy_sync::channel::Channel;
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
 use heapless::Vec;
 
-use crate::audio::{AudioState, MAX_PACKET_SIZE, PACKET_QUEUE_SIZE, PacketClock};
+use crate::audio::{self, AudioState, BitDepth, PACKET_QUEUE_SIZE, PacketClock};
 use crate::diag::{self, InFallbackReason};
+
+const MAX_PACKET_SIZE: usize = 97 * audio::bytes_per_audio_frame(BitDepth::Pcm24);
 
 pub(crate) type AudioPacket = Vec<u8, MAX_PACKET_SIZE>;
 pub(crate) type PacketQueue = Channel<CriticalSectionRawMutex, AudioPacket, PACKET_QUEUE_SIZE>;
@@ -27,7 +29,11 @@ pub(crate) async fn out_task<'d, D: Driver<'d>>(
                     }
                     let formats = state.formats();
                     let out_format = formats.out;
-                    let bytes_per_audio_frame = out_format.bytes_per_audio_frame();
+                    let bytes_per_audio_frame = out_format
+                        .alternate_setting
+                        .bit_depth()
+                        .map(audio::bytes_per_audio_frame)
+                        .unwrap_or(0);
                     if !formats.loopback_format_matches()
                         || bytes_per_audio_frame == 0
                         || len % bytes_per_audio_frame != 0
@@ -68,11 +74,11 @@ pub(crate) async fn in_task<'d, D: Driver<'d>>(
         loop {
             let formats = state.formats();
             let in_format = formats.in_;
-            let bytes_per_audio_frame = in_format.bytes_per_audio_frame();
-            if bytes_per_audio_frame == 0 {
+            let Some(bit_depth) = in_format.alternate_setting.bit_depth() else {
                 embassy_futures::yield_now().await;
                 continue;
-            }
+            };
+            let bytes_per_audio_frame = audio::bytes_per_audio_frame(bit_depth);
 
             let format_matches = formats.loopback_format_matches();
             let mut fallback_reason = None;
