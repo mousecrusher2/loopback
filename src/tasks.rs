@@ -25,7 +25,6 @@ pub async fn out_task<'d, D: Driver<'d>>(
                     if len == 0 {
                         continue;
                     }
-                    diag::add_out_packet(len);
                     let formats = state.formats();
                     let out_format = formats.out;
                     let bytes_per_audio_frame = out_format.bytes_per_audio_frame();
@@ -36,7 +35,6 @@ pub async fn out_task<'d, D: Driver<'d>>(
                         packets.clear();
                     } else if enqueue_packet(packets, &packet[..len]).is_err() {
                         packets.clear();
-                        diag::add_out_drop();
                         let _ = enqueue_packet(packets, &packet[..len]);
                     }
                 }
@@ -82,7 +80,6 @@ pub async fn in_task<'d, D: Driver<'d>>(
                 if let Ok(packet) = packets.try_receive() {
                     Some(packet)
                 } else {
-                    diag::add_in_queue_empty();
                     fallback_reason = Some(InFallbackReason::QueueEmpty);
                     None
                 }
@@ -92,9 +89,6 @@ pub async fn in_task<'d, D: Driver<'d>>(
             };
 
             let write_result = if let Some(loopback_packet) = loopback_packet {
-                let len = loopback_packet.len();
-                diag::add_in_packet(len);
-                diag::add_in_loopback_bytes(len);
                 ep.write(loopback_packet.as_slice()).await
             } else {
                 let packet_len = clock.next_len(in_format.rate, bytes_per_audio_frame);
@@ -102,7 +96,6 @@ pub async fn in_task<'d, D: Driver<'d>>(
                 if let Some(reason) = fallback_reason {
                     diag::add_in_fallback(reason, packet_len);
                 }
-                diag::add_in_packet(packet_len);
 
                 if !format_matches {
                     packets.clear();

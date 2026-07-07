@@ -17,9 +17,6 @@ heapless = "0.9.3"
 panic-halt = "1"
 static_cell = "2"
 
-[features]
-diagnostics = []
-
 [lints.clippy]
 pedantic = "warn"
 perf = "warn"

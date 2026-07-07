@@ -1,13 +1,8 @@
 param(
     [ValidateSet("debug", "release")]
-    [Alias("Profile")]
     [string]$BuildProfile = "release",
 
-    [string[]]$Features = @(),
-
     [string]$Output = "",
-
-    [switch]$NoDefaultFeatures,
 
     [switch]$VerboseUf2
 )
@@ -26,12 +21,6 @@ if (-not $Elf2Uf2) {
 $BuildArgs = @("build", "--bin", $BinName, "--target", $Target)
 if ($BuildProfile -eq "release") {
     $BuildArgs += "--release"
-}
-if ($NoDefaultFeatures) {
-    $BuildArgs += "--no-default-features"
-}
-if ($Features.Count -gt 0) {
-    $BuildArgs += @("--features", ($Features -join ","))
 }
 
 Push-Location $RepoRoot

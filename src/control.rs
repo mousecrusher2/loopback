@@ -2,7 +2,6 @@ use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestT
 use embassy_usb::types::InterfaceNumber;
 
 use crate::audio::{AudioState, AudioStreamingAlternateSetting, SampleRate, StreamDirection};
-use crate::diag;
 use crate::tasks::PacketQueue;
 
 const SET_CUR: u8 = 0x01;
@@ -74,10 +73,6 @@ impl AudioControlHandler {
 impl embassy_usb::Handler for AudioControlHandler {
     fn reset(&mut self) {
         self.state.reset();
-        diag::set_out_alt(AudioStreamingAlternateSetting::Inactive);
-        diag::set_in_alt(AudioStreamingAlternateSetting::Inactive);
-        diag::set_out_rate(None);
-        diag::set_in_rate(None);
         self.packets.clear();
     }
 
@@ -90,19 +85,8 @@ impl embassy_usb::Handler for AudioControlHandler {
                 return;
             };
 
-            let format = self
-                .state
+            self.state
                 .set_alternate_setting(direction, alternate_setting);
-            match direction {
-                StreamDirection::Out => {
-                    diag::set_out_alt(format.alternate_setting);
-                    diag::set_out_rate(Some(format.rate));
-                }
-                StreamDirection::In => {
-                    diag::set_in_alt(format.alternate_setting);
-                    diag::set_in_rate(Some(format.rate));
-                }
-            }
             self.packets.clear();
         }
     }
@@ -133,12 +117,8 @@ impl embassy_usb::Handler for AudioControlHandler {
             return Some(OutResponse::Rejected);
         }
 
-        let Some(format) = self.state.set_rate(direction, rate) else {
+        if self.state.set_rate(direction, rate).is_none() {
             return Some(OutResponse::Rejected);
-        };
-        match direction {
-            StreamDirection::Out => diag::set_out_rate(Some(format.rate)),
-            StreamDirection::In => diag::set_in_rate(Some(format.rate)),
         }
         self.packets.clear();
         Some(OutResponse::Accepted)
