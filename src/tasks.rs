@@ -32,8 +32,7 @@ pub(crate) async fn out_task<'d, D: Driver<'d>>(
                     let bytes_per_audio_frame = out_format
                         .alternate_setting
                         .bit_depth()
-                        .map(audio::bytes_per_audio_frame)
-                        .unwrap_or(0);
+                        .map_or(0, audio::bytes_per_audio_frame);
                     if !formats.loopback_format_matches()
                         || bytes_per_audio_frame == 0
                         || len % bytes_per_audio_frame != 0
