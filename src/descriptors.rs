@@ -1,11 +1,9 @@
 use embassy_usb::descriptor::{SynchronizationType, UsageType};
 use embassy_usb::driver::{Driver, Endpoint, EndpointInfo, EndpointType};
 use embassy_usb::types::InterfaceNumber;
-use embassy_usb::{Builder, InterfaceAltBuilder};
+use embassy_usb::{Builder, InterfaceAltBuilder, InterfaceBuilder};
 
-use crate::audio::{
-    BitDepth, CHANNEL_COUNT, bit_resolution, subframe_size, supported_sample_rates,
-};
+use crate::spec::{self, PcmFormat};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIO_CONTROL: u8 = 0x01;
@@ -29,22 +27,27 @@ const TERMINAL_SPEAKER: u16 = 0x0301;
 const FORMAT_PCM: u16 = 0x0001;
 const CHANNEL_CONFIG_STEREO: u16 = 0x0003;
 
-const OUT_USB_TERMINAL_ID: u8 = 1;
-const OUT_SPEAKER_TERMINAL_ID: u8 = 2;
-const IN_MIC_TERMINAL_ID: u8 = 3;
-const IN_USB_TERMINAL_ID: u8 = 4;
+const PLAYBACK_USB_TERMINAL_ID: u8 = 1;
+const PLAYBACK_SPEAKER_TERMINAL_ID: u8 = 2;
+const CAPTURE_MIC_TERMINAL_ID: u8 = 3;
+const CAPTURE_USB_TERMINAL_ID: u8 = 4;
+
+#[derive(Clone, Copy)]
+pub(crate) struct AudioRouting {
+    pub(crate) playback_interface: InterfaceNumber,
+    pub(crate) capture_interface: InterfaceNumber,
+    pub(crate) playback_endpoints: [u8; 3],
+    pub(crate) capture_endpoints: [u8; 3],
+}
 
 pub(crate) struct AudioEndpoints<'d, D: Driver<'d>> {
-    pub(crate) out_ep16: D::EndpointOut,
-    pub(crate) out_ep24: D::EndpointOut,
-    pub(crate) out_ep32: D::EndpointOut,
-    pub(crate) in_ep16: D::EndpointIn,
-    pub(crate) in_ep24: D::EndpointIn,
-    pub(crate) in_ep32: D::EndpointIn,
-    pub(crate) out_streaming_if: InterfaceNumber,
-    pub(crate) in_streaming_if: InterfaceNumber,
-    pub(crate) out_ep_addrs: [u8; 3],
-    pub(crate) in_ep_addrs: [u8; 3],
+    pub(crate) playback_16: D::EndpointOut,
+    pub(crate) playback_24: D::EndpointOut,
+    pub(crate) playback_32: D::EndpointOut,
+    pub(crate) capture_16: D::EndpointIn,
+    pub(crate) capture_24: D::EndpointIn,
+    pub(crate) capture_32: D::EndpointIn,
+    pub(crate) routing: AudioRouting,
 }
 
 pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
@@ -56,180 +59,113 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
         USB_AUDIO_PROTOCOL_UNDEFINED,
     );
 
-    let mut control_if = function.interface();
-    let control_if_number = control_if.interface_number();
-    let out_streaming_if_number = u8::from(control_if_number) + 1;
-    let in_streaming_if_number = u8::from(control_if_number) + 2;
-    let mut alt = control_if.alt_setting(
+    let mut control = function.interface();
+    let control_number = control.interface_number();
+    let playback_interface = u8::from(control_number) + 1;
+    let capture_interface = u8::from(control_number) + 2;
+    let mut control_alt = control.alt_setting(
         USB_CLASS_AUDIO,
         USB_SUBCLASS_AUDIO_CONTROL,
         USB_AUDIO_PROTOCOL_UNDEFINED,
         None,
     );
-    write_audio_control_descriptors(&mut alt, out_streaming_if_number, in_streaming_if_number);
+    write_audio_control(&mut control_alt, playback_interface, capture_interface);
 
-    let mut out_if = function.interface();
-    let out_streaming_if = out_if.interface_number();
+    let mut playback = function.interface();
+    let playback_interface = playback.interface_number();
+    write_zero_bandwidth_alt(&mut playback);
+    let (playback_16, playback_16_addr) = write_playback_alt(&mut playback, &spec::PCM_FORMATS[0]);
+    let (playback_24, playback_24_addr) = write_playback_alt(&mut playback, &spec::PCM_FORMATS[1]);
+    let (playback_32, playback_32_addr) = write_playback_alt(&mut playback, &spec::PCM_FORMATS[2]);
 
-    let _alt0 = out_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-
-    let mut alt16 = out_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-    let bit_depth = BitDepth::Pcm16;
-    let packet_size = max_packet_size(bit_depth);
-    write_streaming_descriptors(&mut alt16, OUT_USB_TERMINAL_ID, bit_depth);
-    let out_ep16 = alt16.alloc_endpoint_out(EndpointType::Isochronous, None, packet_size, 1);
-    let out_info16 = *out_ep16.info();
-    write_audio_data_endpoint(
-        &mut alt16,
-        &out_info16,
-        packet_size,
-        SynchronizationType::Adaptive,
-    );
-    write_class_specific_endpoint(&mut alt16);
-
-    let mut alt24 = out_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-    let bit_depth = BitDepth::Pcm24;
-    let packet_size = max_packet_size(bit_depth);
-    write_streaming_descriptors(&mut alt24, OUT_USB_TERMINAL_ID, bit_depth);
-    let out_ep24 = alt24.alloc_endpoint_out(EndpointType::Isochronous, None, packet_size, 1);
-    let out_info24 = *out_ep24.info();
-    write_audio_data_endpoint(
-        &mut alt24,
-        &out_info24,
-        packet_size,
-        SynchronizationType::Adaptive,
-    );
-    write_class_specific_endpoint(&mut alt24);
-
-    let mut alt32 = out_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-    let bit_depth = BitDepth::Pcm32;
-    let packet_size = max_packet_size(bit_depth);
-    write_streaming_descriptors(&mut alt32, OUT_USB_TERMINAL_ID, bit_depth);
-    let out_ep32 = alt32.alloc_endpoint_out(EndpointType::Isochronous, None, packet_size, 1);
-    let out_info32 = *out_ep32.info();
-    write_audio_data_endpoint(
-        &mut alt32,
-        &out_info32,
-        packet_size,
-        SynchronizationType::Adaptive,
-    );
-    write_class_specific_endpoint(&mut alt32);
-
-    let mut in_if = function.interface();
-    let in_streaming_if = in_if.interface_number();
-    let _alt0 = in_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-
-    let mut alt16 = in_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-    let bit_depth = BitDepth::Pcm16;
-    let packet_size = max_packet_size(bit_depth);
-    write_streaming_descriptors(&mut alt16, IN_USB_TERMINAL_ID, bit_depth);
-    let in_ep16 = alt16.alloc_endpoint_in(EndpointType::Isochronous, None, packet_size, 1);
-    let in_info16 = *in_ep16.info();
-    write_audio_data_endpoint(
-        &mut alt16,
-        &in_info16,
-        packet_size,
-        SynchronizationType::Asynchronous,
-    );
-    write_class_specific_endpoint(&mut alt16);
-
-    let mut alt24 = in_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-    let bit_depth = BitDepth::Pcm24;
-    let packet_size = max_packet_size(bit_depth);
-    write_streaming_descriptors(&mut alt24, IN_USB_TERMINAL_ID, bit_depth);
-    let in_ep24 = alt24.alloc_endpoint_in(EndpointType::Isochronous, None, packet_size, 1);
-    let in_info24 = *in_ep24.info();
-    write_audio_data_endpoint(
-        &mut alt24,
-        &in_info24,
-        packet_size,
-        SynchronizationType::Asynchronous,
-    );
-    write_class_specific_endpoint(&mut alt24);
-
-    let mut alt32 = in_if.alt_setting(
-        USB_CLASS_AUDIO,
-        USB_SUBCLASS_AUDIO_STREAMING,
-        USB_AUDIO_PROTOCOL_UNDEFINED,
-        None,
-    );
-    let bit_depth = BitDepth::Pcm32;
-    let packet_size = max_packet_size(bit_depth);
-    write_streaming_descriptors(&mut alt32, IN_USB_TERMINAL_ID, bit_depth);
-    let in_ep32 = alt32.alloc_endpoint_in(EndpointType::Isochronous, None, packet_size, 1);
-    let in_info32 = *in_ep32.info();
-    write_audio_data_endpoint(
-        &mut alt32,
-        &in_info32,
-        packet_size,
-        SynchronizationType::Asynchronous,
-    );
-    write_class_specific_endpoint(&mut alt32);
+    let mut capture = function.interface();
+    let capture_interface = capture.interface_number();
+    write_zero_bandwidth_alt(&mut capture);
+    let (capture_16, capture_16_addr) = write_capture_alt(&mut capture, &spec::PCM_FORMATS[0]);
+    let (capture_24, capture_24_addr) = write_capture_alt(&mut capture, &spec::PCM_FORMATS[1]);
+    let (capture_32, capture_32_addr) = write_capture_alt(&mut capture, &spec::PCM_FORMATS[2]);
 
     AudioEndpoints {
-        out_ep16,
-        out_ep24,
-        out_ep32,
-        in_ep16,
-        in_ep24,
-        in_ep32,
-        out_streaming_if,
-        in_streaming_if,
-        out_ep_addrs: [
-            u8::from(out_info16.addr),
-            u8::from(out_info24.addr),
-            u8::from(out_info32.addr),
-        ],
-        in_ep_addrs: [
-            u8::from(in_info16.addr),
-            u8::from(in_info24.addr),
-            u8::from(in_info32.addr),
-        ],
+        playback_16,
+        playback_24,
+        playback_32,
+        capture_16,
+        capture_24,
+        capture_32,
+        routing: AudioRouting {
+            playback_interface,
+            capture_interface,
+            playback_endpoints: [playback_16_addr, playback_24_addr, playback_32_addr],
+            capture_endpoints: [capture_16_addr, capture_24_addr, capture_32_addr],
+        },
     }
 }
 
-fn write_audio_control_descriptors<'d, D: Driver<'d>>(
+fn write_zero_bandwidth_alt<'d, D: Driver<'d>>(interface: &mut InterfaceBuilder<'_, 'd, D>) {
+    let _ = interface.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    );
+}
+
+fn write_playback_alt<'d, D: Driver<'d>>(
+    interface: &mut InterfaceBuilder<'_, 'd, D>,
+    format: &PcmFormat,
+) -> (D::EndpointOut, u8) {
+    let mut alt = stream_alt(interface);
+    write_streaming_descriptors(&mut alt, PLAYBACK_USB_TERMINAL_ID, format);
+    let endpoint =
+        alt.alloc_endpoint_out(EndpointType::Isochronous, None, format.max_packet_size, 1);
+    let endpoint_info = *endpoint.info();
+    write_audio_endpoint(
+        &mut alt,
+        &endpoint_info,
+        format.max_packet_size,
+        SynchronizationType::Adaptive,
+    );
+    write_sampling_frequency_control(&mut alt);
+    (endpoint, u8::from(endpoint_info.addr))
+}
+
+fn write_capture_alt<'d, D: Driver<'d>>(
+    interface: &mut InterfaceBuilder<'_, 'd, D>,
+    format: &PcmFormat,
+) -> (D::EndpointIn, u8) {
+    let mut alt = stream_alt(interface);
+    write_streaming_descriptors(&mut alt, CAPTURE_USB_TERMINAL_ID, format);
+    let endpoint =
+        alt.alloc_endpoint_in(EndpointType::Isochronous, None, format.max_packet_size, 1);
+    let endpoint_info = *endpoint.info();
+    write_audio_endpoint(
+        &mut alt,
+        &endpoint_info,
+        format.max_packet_size,
+        SynchronizationType::Asynchronous,
+    );
+    write_sampling_frequency_control(&mut alt);
+    (endpoint, u8::from(endpoint_info.addr))
+}
+
+fn stream_alt<'a, 'b, 'd, D: Driver<'d>>(
+    interface: &'a mut InterfaceBuilder<'b, 'd, D>,
+) -> InterfaceAltBuilder<'a, 'd, D> {
+    interface.alt_setting(
+        USB_CLASS_AUDIO,
+        USB_SUBCLASS_AUDIO_STREAMING,
+        USB_AUDIO_PROTOCOL_UNDEFINED,
+        None,
+    )
+}
+
+fn write_audio_control<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
-    out_streaming_if: u8,
-    in_streaming_if: u8,
+    playback_interface: u8,
+    capture_interface: u8,
 ) {
     const AC_TOTAL_LENGTH: u16 = 52;
-    let [lo, hi] = AC_TOTAL_LENGTH.to_le_bytes();
+    let [total_lo, total_hi] = AC_TOTAL_LENGTH.to_le_bytes();
 
     alt.descriptor(
         CS_INTERFACE,
@@ -237,39 +173,39 @@ fn write_audio_control_descriptors<'d, D: Driver<'d>>(
             AC_HEADER,
             0x00,
             0x01,
-            lo,
-            hi,
+            total_lo,
+            total_hi,
             0x02,
-            out_streaming_if,
-            in_streaming_if,
+            playback_interface,
+            capture_interface,
         ],
     );
 
     write_input_terminal(
         alt,
-        OUT_USB_TERMINAL_ID,
+        PLAYBACK_USB_TERMINAL_ID,
         TERMINAL_USB_STREAMING,
-        CHANNEL_COUNT,
+        spec::CHANNELS,
         CHANNEL_CONFIG_STEREO,
     );
     write_output_terminal(
         alt,
-        OUT_SPEAKER_TERMINAL_ID,
+        PLAYBACK_SPEAKER_TERMINAL_ID,
         TERMINAL_SPEAKER,
-        OUT_USB_TERMINAL_ID,
+        PLAYBACK_USB_TERMINAL_ID,
     );
     write_input_terminal(
         alt,
-        IN_MIC_TERMINAL_ID,
+        CAPTURE_MIC_TERMINAL_ID,
         TERMINAL_MICROPHONE,
-        CHANNEL_COUNT,
+        spec::CHANNELS,
         CHANNEL_CONFIG_STEREO,
     );
     write_output_terminal(
         alt,
-        IN_USB_TERMINAL_ID,
+        CAPTURE_USB_TERMINAL_ID,
         TERMINAL_USB_STREAMING,
-        IN_MIC_TERMINAL_ID,
+        CAPTURE_MIC_TERMINAL_ID,
     );
 }
 
@@ -277,23 +213,23 @@ fn write_input_terminal<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
     terminal_id: u8,
     terminal_type: u16,
-    channel_count: u8,
+    channels: u8,
     channel_config: u16,
 ) {
-    let [tt0, tt1] = terminal_type.to_le_bytes();
-    let [cc0, cc1] = channel_config.to_le_bytes();
+    let [type_lo, type_hi] = terminal_type.to_le_bytes();
+    let [config_lo, config_hi] = channel_config.to_le_bytes();
 
     alt.descriptor(
         CS_INTERFACE,
         &[
             AC_INPUT_TERMINAL,
             terminal_id,
-            tt0,
-            tt1,
+            type_lo,
+            type_hi,
             0x00,
-            channel_count,
-            cc0,
-            cc1,
+            channels,
+            config_lo,
+            config_hi,
             0x00,
             0x00,
         ],
@@ -306,15 +242,15 @@ fn write_output_terminal<'d, D: Driver<'d>>(
     terminal_type: u16,
     source_id: u8,
 ) {
-    let [lo, hi] = terminal_type.to_le_bytes();
+    let [type_lo, type_hi] = terminal_type.to_le_bytes();
 
     alt.descriptor(
         CS_INTERFACE,
         &[
             AC_OUTPUT_TERMINAL,
             terminal_id,
-            lo,
-            hi,
+            type_lo,
+            type_hi,
             0x00,
             source_id,
             0x00,
@@ -325,56 +261,51 @@ fn write_output_terminal<'d, D: Driver<'d>>(
 fn write_streaming_descriptors<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
     terminal_link: u8,
-    bit_depth: BitDepth,
+    format: &PcmFormat,
 ) {
-    let [lo, hi] = FORMAT_PCM.to_le_bytes();
-    let sample_rates = supported_sample_rates(bit_depth);
+    let [pcm_lo, pcm_hi] = FORMAT_PCM.to_le_bytes();
 
-    alt.descriptor(CS_INTERFACE, &[AS_GENERAL, terminal_link, 0x01, lo, hi]);
+    alt.descriptor(
+        CS_INTERFACE,
+        &[AS_GENERAL, terminal_link, 0x01, pcm_lo, pcm_hi],
+    );
 
-    let mut format_type = [0u8; 18];
-    format_type[0] = FORMAT_TYPE;
-    format_type[1] = FORMAT_TYPE_I;
-    format_type[2] = CHANNEL_COUNT;
-    format_type[3] = subframe_size(bit_depth);
-    format_type[4] = bit_resolution(bit_depth);
-    format_type[5] = u8::try_from(sample_rates.len()).expect("sample rate count must fit u8");
+    let mut descriptor = [0_u8; 18];
+    descriptor[0] = FORMAT_TYPE;
+    descriptor[1] = FORMAT_TYPE_I;
+    descriptor[2] = spec::CHANNELS;
+    descriptor[3] = format.sample.byte_width();
+    descriptor[4] = format.sample.bit_resolution();
+    descriptor[5] = u8::try_from(format.rates.len()).expect("sample-rate count fits u8");
+
     let mut offset = 6;
-    for rate in sample_rates {
-        let [rate_hz @ .., 0] = rate.hz().to_le_bytes() else {
-            unreachable!("sample rate must fit UAC1 24-bit tSamFreq");
+    for rate in format.rates {
+        let [b0, b1, b2, 0] = rate.hz().to_le_bytes() else {
+            unreachable!("UAC1 sample rates fit in 24 bits");
         };
-        format_type[offset..offset + 3].copy_from_slice(&rate_hz);
+        descriptor[offset..offset + 3].copy_from_slice(&[b0, b1, b2]);
         offset += 3;
     }
-    alt.descriptor(CS_INTERFACE, &format_type[..offset]);
+
+    alt.descriptor(CS_INTERFACE, &descriptor[..offset]);
 }
 
-const fn max_packet_size(bit_depth: BitDepth) -> u16 {
-    match bit_depth {
-        BitDepth::Pcm16 | BitDepth::Pcm24 => {
-            97 * CHANNEL_COUNT as u16 * subframe_size(bit_depth) as u16
-        }
-        BitDepth::Pcm32 => 49 * CHANNEL_COUNT as u16 * subframe_size(bit_depth) as u16,
-    }
-}
-
-fn write_class_specific_endpoint<'d, D: Driver<'d>>(alt: &mut InterfaceAltBuilder<'_, 'd, D>) {
+fn write_sampling_frequency_control<'d, D: Driver<'d>>(alt: &mut InterfaceAltBuilder<'_, 'd, D>) {
     alt.descriptor(CS_ENDPOINT, &[EP_GENERAL, 0x01, 0x00, 0x00, 0x00]);
 }
 
-fn write_audio_data_endpoint<'d, D: Driver<'d>>(
+fn write_audio_endpoint<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
     endpoint: &EndpointInfo,
     max_packet_size: u16,
     synchronization_type: SynchronizationType,
 ) {
-    let mut endpoint = *endpoint;
-    endpoint.max_packet_size = max_packet_size;
+    let mut descriptor_endpoint = *endpoint;
+    descriptor_endpoint.max_packet_size = max_packet_size;
     alt.endpoint_descriptor(
-        &endpoint,
+        &descriptor_endpoint,
         synchronization_type,
         UsageType::DataEndpoint,
-        &[0, 0],
+        &[0x00, 0x00],
     );
 }

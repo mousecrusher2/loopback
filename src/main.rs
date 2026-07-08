@@ -6,5 +6,5 @@ use panic_halt as _;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    pico2_uac1_loopback::lib_main(spawner);
+    pico2_uac1_loopback::run(spawner);
 }
