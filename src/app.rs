@@ -7,18 +7,20 @@ use crate::board::{self, UsbDriver};
 use crate::control::AudioControl;
 use crate::descriptors::{AudioEndpoints, build_audio_function};
 use crate::diagnostics::fallback_led_task;
-use crate::streams::{AudioQueue, StreamState, capture_task, playback_task};
+use crate::streams::{
+    AudioQueues, AudioReceiver, AudioSender, StreamState, capture_task, init_audio_queues,
+    playback_task,
+};
 
 static STREAM_STATE: StreamState = StreamState::new();
-static AUDIO_QUEUE: AudioQueue = AudioQueue::new();
 
 pub(crate) fn run(spawner: Spawner) {
     let peripherals = embassy_rp::init(embassy_rp::config::Config::default());
     let driver = board::usb_driver(peripherals.USB);
 
     let config_descriptor = {
-        static CELL: StaticCell<[u8; 1024]> = StaticCell::new();
-        CELL.init([0; 1024])
+        static CELL: StaticCell<[u8; crate::spec::CONFIG_DESCRIPTOR_CAPACITY]> = StaticCell::new();
+        CELL.init([0; crate::spec::CONFIG_DESCRIPTOR_CAPACITY])
     };
     let bos_descriptor = {
         static CELL: StaticCell<[u8; 32]> = StaticCell::new();
@@ -43,17 +45,14 @@ pub(crate) fn run(spawner: Spawner) {
     );
 
     let endpoints = build_audio_function(&mut builder);
+    let control_map = endpoints.control_map();
     let handler = {
         static CELL: StaticCell<AudioControl> = StaticCell::new();
-        CELL.init(AudioControl::new(
-            &STREAM_STATE,
-            &AUDIO_QUEUE,
-            endpoints.routing,
-        ))
+        CELL.init(AudioControl::new(&STREAM_STATE, control_map))
     };
     builder.handler(handler);
 
-    spawn_usb(spawner, builder.build(), endpoints);
+    spawn_usb(spawner, builder.build(), endpoints, init_audio_queues());
     spawner.spawn(fallback_led_task(peripherals.PIN_25).unwrap());
 }
 
@@ -61,7 +60,6 @@ fn usb_config() -> usb::Config<'static> {
     let mut config = usb::Config::new(crate::spec::USB_VENDOR_ID, crate::spec::USB_PRODUCT_ID);
     config.manufacturer = Some(crate::spec::USB_MANUFACTURER);
     config.product = Some(crate::spec::USB_PRODUCT);
-    config.serial_number = Some(crate::spec::USB_SERIAL);
     config.max_packet_size_0 = crate::spec::USB_MAX_PACKET_SIZE_0;
     config.max_power = crate::spec::USB_MAX_POWER_MA;
     config
@@ -71,14 +69,24 @@ fn spawn_usb(
     spawner: Spawner,
     usb_device: usb::UsbDevice<'static, UsbDriver>,
     endpoints: AudioEndpoints<'static, UsbDriver>,
+    queues: &'static mut AudioQueues,
 ) {
+    let playback = endpoints.playback;
+    let capture = endpoints.capture;
+    let queue_ends = queues.each_mut().map(|queue| queue.split());
+
     spawner.spawn(usb_task(usb_device).unwrap());
-    spawner.spawn(playback_endpoint_task(endpoints.playback_16).unwrap());
-    spawner.spawn(playback_endpoint_task(endpoints.playback_24).unwrap());
-    spawner.spawn(playback_endpoint_task(endpoints.playback_32).unwrap());
-    spawner.spawn(capture_endpoint_task(endpoints.capture_16).unwrap());
-    spawner.spawn(capture_endpoint_task(endpoints.capture_24).unwrap());
-    spawner.spawn(capture_endpoint_task(endpoints.capture_32).unwrap());
+    // Each endpoint keeps a persistent task. This avoids dynamically dispatching
+    // or cancelling endpoint futures when the host changes alternate settings.
+    for (slot, ((playback, capture), (sender, receiver))) in playback
+        .into_iter()
+        .zip(capture)
+        .zip(queue_ends)
+        .enumerate()
+    {
+        spawner.spawn(playback_endpoint_task(slot, playback, sender).unwrap());
+        spawner.spawn(capture_endpoint_task(slot, capture, receiver).unwrap());
+    }
 }
 
 #[embassy_executor::task]
@@ -86,12 +94,20 @@ async fn usb_task(mut usb_device: usb::UsbDevice<'static, UsbDriver>) {
     usb_device.run().await;
 }
 
-#[embassy_executor::task(pool_size = 3)]
-async fn playback_endpoint_task(endpoint: <UsbDriver as Driver<'static>>::EndpointOut) {
-    playback_task::<UsbDriver>(endpoint, &STREAM_STATE, &AUDIO_QUEUE).await;
+#[embassy_executor::task(pool_size = crate::spec::FORMAT_COUNT)]
+async fn playback_endpoint_task(
+    slot: usize,
+    endpoint: <UsbDriver as Driver<'static>>::EndpointOut,
+    sender: AudioSender,
+) {
+    playback_task::<UsbDriver>(slot, endpoint, &STREAM_STATE, sender).await;
 }
 
-#[embassy_executor::task(pool_size = 3)]
-async fn capture_endpoint_task(endpoint: <UsbDriver as Driver<'static>>::EndpointIn) {
-    capture_task::<UsbDriver>(endpoint, &STREAM_STATE, &AUDIO_QUEUE).await;
+#[embassy_executor::task(pool_size = crate::spec::FORMAT_COUNT)]
+async fn capture_endpoint_task(
+    slot: usize,
+    endpoint: <UsbDriver as Driver<'static>>::EndpointIn,
+    receiver: AudioReceiver,
+) {
+    capture_task::<UsbDriver>(slot, endpoint, &STREAM_STATE, receiver).await;
 }

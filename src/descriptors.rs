@@ -1,5 +1,5 @@
 use embassy_usb::descriptor::{SynchronizationType, UsageType};
-use embassy_usb::driver::{Driver, Endpoint, EndpointInfo, EndpointType};
+use embassy_usb::driver::{Driver, Endpoint, EndpointAddress, EndpointInfo, EndpointType};
 use embassy_usb::types::InterfaceNumber;
 use embassy_usb::{Builder, InterfaceAltBuilder, InterfaceBuilder};
 
@@ -21,33 +21,73 @@ const FORMAT_TYPE: u8 = 0x02;
 const FORMAT_TYPE_I: u8 = 0x01;
 const EP_GENERAL: u8 = 0x01;
 
-const TERMINAL_USB_STREAMING: u16 = 0x0101;
-const TERMINAL_MICROPHONE: u16 = 0x0201;
-const TERMINAL_SPEAKER: u16 = 0x0301;
 const FORMAT_PCM: u16 = 0x0001;
-const CHANNEL_CONFIG_STEREO: u16 = 0x0003;
-
-const PLAYBACK_USB_TERMINAL_ID: u8 = 1;
-const PLAYBACK_SPEAKER_TERMINAL_ID: u8 = 2;
-const CAPTURE_MIC_TERMINAL_ID: u8 = 3;
-const CAPTURE_USB_TERMINAL_ID: u8 = 4;
 
 #[derive(Clone, Copy)]
-pub(crate) struct AudioRouting {
+#[repr(transparent)]
+struct AudioEntityId(u8);
+
+#[derive(Clone, Copy)]
+#[repr(u16)]
+enum TerminalType {
+    UsbStreaming = 0x0101,
+    Microphone = 0x0201,
+    Speaker = 0x0301,
+}
+
+impl TerminalType {
+    const fn to_le_bytes(self) -> [u8; 2] {
+        (self as u16).to_le_bytes()
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct ChannelConfig(u16);
+
+impl ChannelConfig {
+    const STEREO: Self = Self(0x0003);
+
+    const fn to_le_bytes(self) -> [u8; 2] {
+        self.0.to_le_bytes()
+    }
+}
+
+const PLAYBACK_USB_TERMINAL_ID: AudioEntityId = AudioEntityId(1);
+const PLAYBACK_SPEAKER_TERMINAL_ID: AudioEntityId = AudioEntityId(2);
+const CAPTURE_MIC_TERMINAL_ID: AudioEntityId = AudioEntityId(3);
+const CAPTURE_USB_TERMINAL_ID: AudioEntityId = AudioEntityId(4);
+
+#[derive(Clone, Copy)]
+pub(crate) struct AudioControlMap {
     pub(crate) playback_interface: InterfaceNumber,
     pub(crate) capture_interface: InterfaceNumber,
-    pub(crate) playback_endpoints: [u8; 3],
-    pub(crate) capture_endpoints: [u8; 3],
+    pub(crate) playback_endpoint_addresses: [EndpointAddress; spec::FORMAT_COUNT],
+    pub(crate) capture_endpoint_addresses: [EndpointAddress; spec::FORMAT_COUNT],
 }
 
 pub(crate) struct AudioEndpoints<'d, D: Driver<'d>> {
-    pub(crate) playback_16: D::EndpointOut,
-    pub(crate) playback_24: D::EndpointOut,
-    pub(crate) playback_32: D::EndpointOut,
-    pub(crate) capture_16: D::EndpointIn,
-    pub(crate) capture_24: D::EndpointIn,
-    pub(crate) capture_32: D::EndpointIn,
-    pub(crate) routing: AudioRouting,
+    pub(crate) playback: [D::EndpointOut; spec::FORMAT_COUNT],
+    pub(crate) capture: [D::EndpointIn; spec::FORMAT_COUNT],
+    playback_interface: InterfaceNumber,
+    capture_interface: InterfaceNumber,
+}
+
+impl<'d, D: Driver<'d>> AudioEndpoints<'d, D> {
+    pub(crate) fn control_map(&self) -> AudioControlMap {
+        AudioControlMap {
+            playback_interface: self.playback_interface,
+            capture_interface: self.capture_interface,
+            playback_endpoint_addresses: self
+                .playback
+                .each_ref()
+                .map(|endpoint| endpoint.info().addr),
+            capture_endpoint_addresses: self
+                .capture
+                .each_ref()
+                .map(|endpoint| endpoint.info().addr),
+        }
+    }
 }
 
 pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
@@ -61,8 +101,9 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
 
     let mut control = function.interface();
     let control_number = control.interface_number();
-    let playback_interface = u8::from(control_number) + 1;
-    let capture_interface = u8::from(control_number) + 2;
+    // FunctionBuilder guarantees that interface numbers are consecutive.
+    let playback_interface = InterfaceNumber(control_number.0 + 1);
+    let capture_interface = InterfaceNumber(control_number.0 + 2);
     let mut control_alt = control.alt_setting(
         USB_CLASS_AUDIO,
         USB_SUBCLASS_AUDIO_CONTROL,
@@ -74,30 +115,20 @@ pub(crate) fn build_audio_function<'d, D: Driver<'d>>(
     let mut playback = function.interface();
     let playback_interface = playback.interface_number();
     write_zero_bandwidth_alt(&mut playback);
-    let (playback_16, playback_16_addr) = write_playback_alt(&mut playback, &spec::PCM_FORMATS[0]);
-    let (playback_24, playback_24_addr) = write_playback_alt(&mut playback, &spec::PCM_FORMATS[1]);
-    let (playback_32, playback_32_addr) = write_playback_alt(&mut playback, &spec::PCM_FORMATS[2]);
+    let playback =
+        core::array::from_fn(|slot| write_playback_alt(&mut playback, &spec::PCM_FORMATS[slot]));
 
     let mut capture = function.interface();
     let capture_interface = capture.interface_number();
     write_zero_bandwidth_alt(&mut capture);
-    let (capture_16, capture_16_addr) = write_capture_alt(&mut capture, &spec::PCM_FORMATS[0]);
-    let (capture_24, capture_24_addr) = write_capture_alt(&mut capture, &spec::PCM_FORMATS[1]);
-    let (capture_32, capture_32_addr) = write_capture_alt(&mut capture, &spec::PCM_FORMATS[2]);
+    let capture =
+        core::array::from_fn(|slot| write_capture_alt(&mut capture, &spec::PCM_FORMATS[slot]));
 
     AudioEndpoints {
-        playback_16,
-        playback_24,
-        playback_32,
-        capture_16,
-        capture_24,
-        capture_32,
-        routing: AudioRouting {
-            playback_interface,
-            capture_interface,
-            playback_endpoints: [playback_16_addr, playback_24_addr, playback_32_addr],
-            capture_endpoints: [capture_16_addr, capture_24_addr, capture_32_addr],
-        },
+        playback,
+        capture,
+        playback_interface,
+        capture_interface,
     }
 }
 
@@ -113,39 +144,42 @@ fn write_zero_bandwidth_alt<'d, D: Driver<'d>>(interface: &mut InterfaceBuilder<
 fn write_playback_alt<'d, D: Driver<'d>>(
     interface: &mut InterfaceBuilder<'_, 'd, D>,
     format: &PcmFormat,
-) -> (D::EndpointOut, u8) {
+) -> D::EndpointOut {
     let mut alt = stream_alt(interface);
     write_streaming_descriptors(&mut alt, PLAYBACK_USB_TERMINAL_ID, format);
-    let endpoint =
-        alt.alloc_endpoint_out(EndpointType::Isochronous, None, format.max_packet_size, 1);
+    let max_packet_size = format.max_packet_size();
+    let endpoint = alt.alloc_endpoint_out(EndpointType::Isochronous, None, max_packet_size, 1);
     let endpoint_info = *endpoint.info();
     write_audio_endpoint(
         &mut alt,
         &endpoint_info,
-        format.max_packet_size,
+        max_packet_size,
+        // Host-paced OUT is intentional; see docs/uac1-design.md.
         SynchronizationType::Adaptive,
     );
     write_sampling_frequency_control(&mut alt);
-    (endpoint, u8::from(endpoint_info.addr))
+    endpoint
 }
 
 fn write_capture_alt<'d, D: Driver<'d>>(
     interface: &mut InterfaceBuilder<'_, 'd, D>,
     format: &PcmFormat,
-) -> (D::EndpointIn, u8) {
+) -> D::EndpointIn {
     let mut alt = stream_alt(interface);
     write_streaming_descriptors(&mut alt, CAPTURE_USB_TERMINAL_ID, format);
-    let endpoint =
-        alt.alloc_endpoint_in(EndpointType::Isochronous, None, format.max_packet_size, 1);
+    let max_packet_size = format.max_packet_size();
+    let endpoint = alt.alloc_endpoint_in(EndpointType::Isochronous, None, max_packet_size, 1);
     let endpoint_info = *endpoint.info();
     write_audio_endpoint(
         &mut alt,
         &endpoint_info,
-        format.max_packet_size,
+        max_packet_size,
+        // Loopback IN follows queued OUT payload lengths rather than promising a
+        // fixed synchronous sample count per SOF.
         SynchronizationType::Asynchronous,
     );
     write_sampling_frequency_control(&mut alt);
-    (endpoint, u8::from(endpoint_info.addr))
+    endpoint
 }
 
 fn stream_alt<'a, 'b, 'd, D: Driver<'d>>(
@@ -161,8 +195,8 @@ fn stream_alt<'a, 'b, 'd, D: Driver<'d>>(
 
 fn write_audio_control<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
-    playback_interface: u8,
-    capture_interface: u8,
+    playback_interface: InterfaceNumber,
+    capture_interface: InterfaceNumber,
 ) {
     const AC_TOTAL_LENGTH: u16 = 52;
     let [total_lo, total_hi] = AC_TOTAL_LENGTH.to_le_bytes();
@@ -176,45 +210,45 @@ fn write_audio_control<'d, D: Driver<'d>>(
             total_lo,
             total_hi,
             0x02,
-            playback_interface,
-            capture_interface,
+            playback_interface.0,
+            capture_interface.0,
         ],
     );
 
     write_input_terminal(
         alt,
         PLAYBACK_USB_TERMINAL_ID,
-        TERMINAL_USB_STREAMING,
+        TerminalType::UsbStreaming,
         spec::CHANNELS,
-        CHANNEL_CONFIG_STEREO,
+        ChannelConfig::STEREO,
     );
     write_output_terminal(
         alt,
         PLAYBACK_SPEAKER_TERMINAL_ID,
-        TERMINAL_SPEAKER,
+        TerminalType::Speaker,
         PLAYBACK_USB_TERMINAL_ID,
     );
     write_input_terminal(
         alt,
         CAPTURE_MIC_TERMINAL_ID,
-        TERMINAL_MICROPHONE,
+        TerminalType::Microphone,
         spec::CHANNELS,
-        CHANNEL_CONFIG_STEREO,
+        ChannelConfig::STEREO,
     );
     write_output_terminal(
         alt,
         CAPTURE_USB_TERMINAL_ID,
-        TERMINAL_USB_STREAMING,
+        TerminalType::UsbStreaming,
         CAPTURE_MIC_TERMINAL_ID,
     );
 }
 
 fn write_input_terminal<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
-    terminal_id: u8,
-    terminal_type: u16,
+    terminal_id: AudioEntityId,
+    terminal_type: TerminalType,
     channels: u8,
-    channel_config: u16,
+    channel_config: ChannelConfig,
 ) {
     let [type_lo, type_hi] = terminal_type.to_le_bytes();
     let [config_lo, config_hi] = channel_config.to_le_bytes();
@@ -223,7 +257,7 @@ fn write_input_terminal<'d, D: Driver<'d>>(
         CS_INTERFACE,
         &[
             AC_INPUT_TERMINAL,
-            terminal_id,
+            terminal_id.0,
             type_lo,
             type_hi,
             0x00,
@@ -238,9 +272,9 @@ fn write_input_terminal<'d, D: Driver<'d>>(
 
 fn write_output_terminal<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
-    terminal_id: u8,
-    terminal_type: u16,
-    source_id: u8,
+    terminal_id: AudioEntityId,
+    terminal_type: TerminalType,
+    source_id: AudioEntityId,
 ) {
     let [type_lo, type_hi] = terminal_type.to_le_bytes();
 
@@ -248,11 +282,11 @@ fn write_output_terminal<'d, D: Driver<'d>>(
         CS_INTERFACE,
         &[
             AC_OUTPUT_TERMINAL,
-            terminal_id,
+            terminal_id.0,
             type_lo,
             type_hi,
             0x00,
-            source_id,
+            source_id.0,
             0x00,
         ],
     );
@@ -260,17 +294,17 @@ fn write_output_terminal<'d, D: Driver<'d>>(
 
 fn write_streaming_descriptors<'d, D: Driver<'d>>(
     alt: &mut InterfaceAltBuilder<'_, 'd, D>,
-    terminal_link: u8,
+    terminal_link: AudioEntityId,
     format: &PcmFormat,
 ) {
     let [pcm_lo, pcm_hi] = FORMAT_PCM.to_le_bytes();
 
     alt.descriptor(
         CS_INTERFACE,
-        &[AS_GENERAL, terminal_link, 0x01, pcm_lo, pcm_hi],
+        &[AS_GENERAL, terminal_link.0, 0x01, pcm_lo, pcm_hi],
     );
 
-    let mut descriptor = [0_u8; 18];
+    let mut descriptor = [0_u8; spec::FORMAT_DESCRIPTOR_CAPACITY];
     descriptor[0] = FORMAT_TYPE;
     descriptor[1] = FORMAT_TYPE_I;
     descriptor[2] = spec::CHANNELS;

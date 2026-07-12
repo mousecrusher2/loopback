@@ -2,7 +2,6 @@ pub(crate) const USB_VENDOR_ID: u16 = 0xcafe;
 pub(crate) const USB_PRODUCT_ID: u16 = 0x4001;
 pub(crate) const USB_MANUFACTURER: &str = "Embassy";
 pub(crate) const USB_PRODUCT: &str = "Pico 2 UAC1 Loopback";
-pub(crate) const USB_SERIAL: &str = "pico2-loopback-0005";
 pub(crate) const USB_MAX_PACKET_SIZE_0: u8 = 64;
 pub(crate) const USB_MAX_POWER_MA: u16 = 100;
 
@@ -18,28 +17,28 @@ const RATES_UP_TO_96K: [SampleRate; 4] = [
 ];
 const RATES_UP_TO_48K: [SampleRate; 2] = [SampleRate::R44100, SampleRate::R48000];
 
-pub(crate) const PCM_FORMATS: [PcmFormat; 3] = [
+// Keep formats and rates in one table. Alternate numbers, endpoints, task pools,
+// MPS values, and descriptor capacities are all derived from its order/content.
+pub(crate) const PCM_FORMATS: &[PcmFormat] = &[
     PcmFormat {
-        alternate_setting: 1,
         sample: SampleWidth::Bits16,
         rates: &RATES_UP_TO_96K,
-        max_packet_size: 388,
     },
     PcmFormat {
-        alternate_setting: 2,
         sample: SampleWidth::Bits24,
         rates: &RATES_UP_TO_96K,
-        max_packet_size: 582,
     },
     PcmFormat {
-        alternate_setting: 3,
         sample: SampleWidth::Bits32,
         rates: &RATES_UP_TO_48K,
-        max_packet_size: 392,
     },
 ];
 
-pub(crate) const MAX_AUDIO_PACKET_BYTES: usize = 582;
+pub(crate) const FORMAT_COUNT: usize = PCM_FORMATS.len();
+pub(crate) const MAX_AUDIO_PACKET_BYTES: usize = max_audio_packet_bytes();
+pub(crate) const MAX_RATES_PER_FORMAT: usize = max_rates_per_format();
+pub(crate) const FORMAT_DESCRIPTOR_CAPACITY: usize = 6 + 3 * MAX_RATES_PER_FORMAT;
+pub(crate) const CONFIG_DESCRIPTOR_CAPACITY: usize = config_descriptor_capacity();
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum StreamDirection {
@@ -74,10 +73,8 @@ impl SampleWidth {
 
 #[derive(Clone, Copy)]
 pub(crate) struct PcmFormat {
-    pub(crate) alternate_setting: u8,
     pub(crate) sample: SampleWidth,
     pub(crate) rates: &'static [SampleRate],
-    pub(crate) max_packet_size: u16,
 }
 
 impl PcmFormat {
@@ -89,8 +86,37 @@ impl PcmFormat {
         self.rates.contains(&rate)
     }
 
-    pub(crate) fn max_rate(self) -> SampleRate {
-        self.rates[self.rates.len() - 1]
+    pub(crate) const fn max_rate(self) -> SampleRate {
+        let mut maximum = self.rates[0];
+        let mut index = 1;
+        while index < self.rates.len() {
+            let rate = self.rates[index];
+            if rate.hz() > maximum.hz() {
+                maximum = rate;
+            }
+            index += 1;
+        }
+        maximum
+    }
+
+    pub(crate) const fn min_rate(self) -> SampleRate {
+        let mut minimum = self.rates[0];
+        let mut index = 1;
+        while index < self.rates.len() {
+            let rate = self.rates[index];
+            if rate.hz() < minimum.hz() {
+                minimum = rate;
+            }
+            index += 1;
+        }
+        minimum
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) const fn max_packet_size(self) -> u16 {
+        let frames = self.max_rate().hz() / 1_000 + 1;
+        let bytes = frames as usize * self.audio_frame_bytes();
+        bytes as u16
     }
 }
 
@@ -233,19 +259,75 @@ impl DuplexSelection {
 }
 
 pub(crate) fn format_by_alternate_setting(alternate_setting: u8) -> Option<&'static PcmFormat> {
-    PCM_FORMATS
-        .iter()
-        .find(|format| format.alternate_setting == alternate_setting)
+    format_slot_by_alternate_setting(alternate_setting).and_then(format_by_endpoint_slot)
 }
 
 pub(crate) fn format_by_endpoint_slot(slot: usize) -> Option<&'static PcmFormat> {
     PCM_FORMATS.get(slot)
 }
 
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const fn alternate_setting_for_slot(slot: usize) -> Option<u8> {
+    if slot < FORMAT_COUNT {
+        Some(slot as u8 + 1)
+    } else {
+        None
+    }
+}
+
+pub(crate) const fn format_slot_by_alternate_setting(alternate_setting: u8) -> Option<usize> {
+    if alternate_setting == 0 || alternate_setting as usize > FORMAT_COUNT {
+        None
+    } else {
+        Some(alternate_setting as usize - 1)
+    }
+}
+
 pub(crate) fn rate_or_default_for_format(rate: SampleRate, format: &PcmFormat) -> SampleRate {
     if format.supports(rate) {
         rate
-    } else {
+    } else if format.supports(DEFAULT_RATE) {
         DEFAULT_RATE
+    } else {
+        format.min_rate()
     }
+}
+
+const fn max_audio_packet_bytes() -> usize {
+    let mut maximum = 0;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        let packet_size = PCM_FORMATS[slot].max_packet_size() as usize;
+        if packet_size > maximum {
+            maximum = packet_size;
+        }
+        slot += 1;
+    }
+    maximum
+}
+
+const fn max_rates_per_format() -> usize {
+    let mut maximum = 0;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        let rate_count = PCM_FORMATS[slot].rates.len();
+        if rate_count > maximum {
+            maximum = rate_count;
+        }
+        slot += 1;
+    }
+    maximum
+}
+
+const fn config_descriptor_capacity() -> usize {
+    // Configuration, IAD, AudioControl, and both zero-bandwidth interfaces.
+    let mut total = 96;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        // Each direction has one interface, AS general, format, standard endpoint,
+        // and class-specific endpoint descriptor for this format.
+        total += 2 * (40 + 3 * PCM_FORMATS[slot].rates.len());
+        slot += 1;
+    }
+    total
 }
