@@ -13,8 +13,13 @@ The firmware exposes one USB Audio Class 1.0 function with three interfaces:
 - AudioStreaming OUT for host playback into the device
 - AudioStreaming IN for host capture from the device
 
-The AudioControl topology presents a generic speaker path and a generic
-microphone path because desktop hosts classify these terminal types reliably.
+The AudioControl topology presents line-level playback and capture paths. Both
+directions deliberately use the UAC1 Line Connector terminal type. For Capture,
+this avoids the positive software gain range that Windows assigns to microphone
+endpoints and that can clip the already full-scale loopback signal. For
+Playback, Line Connector makes the loopback less likely than a speaker endpoint
+to be selected automatically as the default render device. These classifications
+affect host policy only; the firmware still transfers digital PCM unchanged.
 There is no USB serial string.
 
 When both streaming interfaces select the same alternate setting and sample

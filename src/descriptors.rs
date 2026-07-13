@@ -31,8 +31,7 @@ struct AudioEntityId(u8);
 #[repr(u16)]
 enum TerminalType {
     UsbStreaming = 0x0101,
-    Microphone = 0x0201,
-    Speaker = 0x0301,
+    LineConnector = 0x0603,
 }
 
 impl TerminalType {
@@ -54,8 +53,8 @@ impl ChannelConfig {
 }
 
 const PLAYBACK_USB_TERMINAL_ID: AudioEntityId = AudioEntityId(1);
-const PLAYBACK_SPEAKER_TERMINAL_ID: AudioEntityId = AudioEntityId(2);
-const CAPTURE_MIC_TERMINAL_ID: AudioEntityId = AudioEntityId(3);
+const PLAYBACK_LINE_TERMINAL_ID: AudioEntityId = AudioEntityId(2);
+const CAPTURE_LINE_TERMINAL_ID: AudioEntityId = AudioEntityId(3);
 const CAPTURE_USB_TERMINAL_ID: AudioEntityId = AudioEntityId(4);
 
 #[derive(Clone, Copy)]
@@ -224,14 +223,14 @@ fn write_audio_control<'d, D: Driver<'d>>(
     );
     write_output_terminal(
         alt,
-        PLAYBACK_SPEAKER_TERMINAL_ID,
-        TerminalType::Speaker,
+        PLAYBACK_LINE_TERMINAL_ID,
+        TerminalType::LineConnector,
         PLAYBACK_USB_TERMINAL_ID,
     );
     write_input_terminal(
         alt,
-        CAPTURE_MIC_TERMINAL_ID,
-        TerminalType::Microphone,
+        CAPTURE_LINE_TERMINAL_ID,
+        TerminalType::LineConnector,
         spec::CHANNELS,
         ChannelConfig::STEREO,
     );
@@ -239,7 +238,7 @@ fn write_audio_control<'d, D: Driver<'d>>(
         alt,
         CAPTURE_USB_TERMINAL_ID,
         TerminalType::UsbStreaming,
-        CAPTURE_MIC_TERMINAL_ID,
+        CAPTURE_LINE_TERMINAL_ID,
     );
 }
 
