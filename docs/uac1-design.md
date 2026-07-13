@@ -127,6 +127,12 @@ move of an owned packet through a conventional channel. `heapless::Vec` remains
 the packet representation because it already provides fixed-capacity storage
 with a runtime payload length.
 
+Each format queue has eight slots. Capacity does not add latency while OUT and
+IN advance at the same rate; normal depth is determined by their frame phase.
+Eight slots instead bound the backlog left by a short interval in which IN stops
+while OUT continues. A capacity of one would also prevent OUT from using another
+slot while Capture holds its receiver grant across an IN write.
+
 Isochronous OUT cannot be backpressured and retried. If a format's queue is
 full, the task still services the endpoint and discards the newly arrived
 packet. `BufferOverflow` is treated as a broken internal MPS invariant and the

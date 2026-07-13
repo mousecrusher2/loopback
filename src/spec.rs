@@ -6,7 +6,7 @@ pub(crate) const USB_MAX_PACKET_SIZE_0: u8 = 64;
 pub(crate) const USB_MAX_POWER_MA: u16 = 100;
 
 pub(crate) const CHANNELS: u8 = 2;
-pub(crate) const PACKET_QUEUE_CAPACITY: usize = 16;
+pub(crate) const PACKET_QUEUE_CAPACITY: usize = 8;
 pub(crate) const DEFAULT_RATE: SampleRate = SampleRate::R48000;
 
 const RATES_UP_TO_96K: [SampleRate; 4] = [

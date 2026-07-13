@@ -147,6 +147,8 @@ pub(crate) async fn playback_task<'d, D: Driver<'d>>(
                 continue;
             };
 
+            // Vec length is the queued payload length. Expand it only when the
+            // slot becomes an OUT receive buffer again.
             packet
                 .resize(max_packet_size, 0)
                 .expect("format MPS fits the audio packet");
@@ -182,7 +184,6 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
     let format = spec::format_by_endpoint_slot(slot).expect("capture task has a valid format slot");
     let alternate_setting =
         spec::alternate_setting_for_slot(slot).expect("capture task has an alternate setting");
-    let max_packet_size = format.max_packet_size() as usize;
     let mut silence = [0_u8; spec::MAX_AUDIO_PACKET_BYTES];
     let mut clock = PacketClock::new();
 
@@ -193,7 +194,7 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
         loop {
             let selection = state.snapshot();
             if selection.capture.alternate_setting() != alternate_setting {
-                drain_packets(&mut receiver, max_packet_size);
+                drain_packets(&mut receiver);
                 break;
             }
 
@@ -201,11 +202,6 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
                 && let Some(packet) = receiver.try_receive()
             {
                 let write_result = endpoint.write(packet.as_slice()).await;
-                // Vec length is also the next OUT read buffer length. Restore the
-                // full format MPS before returning this zero-copy slot.
-                packet
-                    .resize(max_packet_size, 0)
-                    .expect("format MPS fits the audio packet");
                 receiver.receive_done();
                 match write_result {
                     Ok(()) => continue,
@@ -215,7 +211,7 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
             }
 
             if !selection.loopback_enabled() {
-                drain_packets(&mut receiver, max_packet_size);
+                drain_packets(&mut receiver);
             }
 
             let len = clock.next_len(selection.capture.rate(), format.audio_frame_bytes());
@@ -230,13 +226,10 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
     }
 }
 
-fn drain_packets(receiver: &mut AudioReceiver, max_packet_size: usize) {
+fn drain_packets(receiver: &mut AudioReceiver) {
     // clear() can reset indices while the other half owns a grant across await.
     // Drain only committed receiver grants and leave uncommitted grants alone.
-    while let Some(packet) = receiver.try_receive() {
-        packet
-            .resize(max_packet_size, 0)
-            .expect("format MPS fits the audio packet");
+    while receiver.try_receive().is_some() {
         receiver.receive_done();
     }
 }
