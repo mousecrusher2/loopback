@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_rp::Peri;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIN_25;
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
 
 static IN_SILENCE_PACKETS: AtomicU32 = AtomicU32::new(0);
 
@@ -48,8 +48,8 @@ impl LedHold {
 
 #[embassy_executor::task]
 pub(crate) async fn fallback_led_task(pin: Peri<'static, PIN_25>) {
-    const POLL_MS: u16 = 10;
-    const HOLD_TICKS: u16 = 1_000 / POLL_MS;
+    const POLL_INTERVAL: Duration = Duration::from_millis(10);
+    const HOLD_TICKS: u16 = 100;
 
     let mut led = Output::new(pin, Level::Low);
     let mut hold = LedHold::new(in_silence_packets(), HOLD_TICKS);
@@ -61,7 +61,7 @@ pub(crate) async fn fallback_led_task(pin: Peri<'static, PIN_25>) {
             led.set_low();
         }
 
-        Timer::after_millis(u64::from(POLL_MS)).await;
+        Timer::after(POLL_INTERVAL).await;
     }
 }
 
