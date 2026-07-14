@@ -13,9 +13,10 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Target = "thumbv8m.main-none-eabihf"
 $BinName = "pico2-uac1-loopback"
 
+$Picotool = Get-Command picotool -ErrorAction SilentlyContinue
 $Elf2Uf2 = Get-Command elf2uf2-rs -ErrorAction SilentlyContinue
-if (-not $Elf2Uf2) {
-    throw "elf2uf2-rs was not found. Install it with: cargo install elf2uf2-rs"
+if (-not $Picotool -and -not $Elf2Uf2) {
+    throw "Neither picotool nor elf2uf2-rs was found. Install picotool, or install the fallback with: cargo install elf2uf2-rs"
 }
 
 $BuildArgs = @("build", "--bin", $BinName, "--target", $Target)
@@ -50,12 +51,22 @@ try {
     New-Item -ItemType Directory -Force $OutputDir | Out-Null
 
     $Uf2Args = @()
+    if ($Picotool) {
+        $Uf2Tool = $Picotool
+        $Uf2Args = @("uf2", "convert")
+    } else {
+        $Uf2Tool = $Elf2Uf2
+    }
     if ($VerboseUf2) {
         $Uf2Args += "--verbose"
     }
-    $Uf2Args += @($ElfPath, $OutputPath)
+    if ($Picotool) {
+        $Uf2Args += @($ElfPath, "-t", "elf", $OutputPath)
+    } else {
+        $Uf2Args += @($ElfPath, $OutputPath)
+    }
 
-    & $Elf2Uf2.Source @Uf2Args
+    & $Uf2Tool.Source @Uf2Args
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
