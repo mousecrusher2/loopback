@@ -203,14 +203,13 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
             }
 
             let len = clock.next_len(rate, format.audio_frame_bytes());
-            diagnostics::record_in_silence();
             silence[..len].fill(0);
             match endpoint.write(&silence[..len]).await {
-                Ok(()) | Err(EndpointError::Disabled) => {}
+                Ok(()) => diagnostics::record_in_loss(),
+                Err(EndpointError::Disabled) => {}
                 Err(EndpointError::BufferOverflow) => return,
             }
         } else {
-            diagnostics::record_in_silence();
             match endpoint.write(&[]).await {
                 Ok(()) | Err(EndpointError::Disabled) => {}
                 Err(EndpointError::BufferOverflow) => return,

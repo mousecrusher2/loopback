@@ -6,7 +6,7 @@ use static_cell::StaticCell;
 use crate::board::{self, UsbDriver};
 use crate::control::AudioControl;
 use crate::descriptors::{AudioEndpoints, build_audio_function};
-use crate::diagnostics::fallback_led_task;
+use crate::diagnostics::loss_led_task;
 use crate::streams::{
     AudioQueues, EndpointRateReceiver, EndpointRateWatches, capture_task, init_audio_queues,
     init_endpoint_rate_watches, playback_task,
@@ -53,7 +53,7 @@ pub(crate) fn run(spawner: Spawner) {
     builder.handler(handler);
 
     spawn_usb(spawner, builder.build(), endpoints, rates, queues);
-    spawner.spawn(fallback_led_task(peripherals.PIN_25).unwrap());
+    spawner.spawn(loss_led_task(peripherals.PIN_25).unwrap());
 }
 
 fn usb_config() -> usb::Config<'static> {

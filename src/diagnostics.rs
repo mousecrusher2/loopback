@@ -5,14 +5,14 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIN_25;
 use embassy_time::{Duration, Timer};
 
-static IN_SILENCE_PACKETS: AtomicU32 = AtomicU32::new(0);
+static IN_LOSS_EVENTS: AtomicU32 = AtomicU32::new(0);
 
-pub(crate) fn record_in_silence() {
-    IN_SILENCE_PACKETS.fetch_add(1, Ordering::Relaxed);
+pub(crate) fn record_in_loss() {
+    IN_LOSS_EVENTS.fetch_add(1, Ordering::Relaxed);
 }
 
-fn in_silence_packets() -> u32 {
-    IN_SILENCE_PACKETS.load(Ordering::Relaxed)
+fn in_loss_events() -> u32 {
+    IN_LOSS_EVENTS.load(Ordering::Relaxed)
 }
 
 struct LedHold {
@@ -47,15 +47,15 @@ impl LedHold {
 }
 
 #[embassy_executor::task]
-pub(crate) async fn fallback_led_task(pin: Peri<'static, PIN_25>) {
+pub(crate) async fn loss_led_task(pin: Peri<'static, PIN_25>) {
     const POLL_INTERVAL: Duration = Duration::from_millis(10);
     const HOLD_TICKS: u16 = 100;
 
     let mut led = Output::new(pin, Level::Low);
-    let mut hold = LedHold::new(in_silence_packets(), HOLD_TICKS);
+    let mut hold = LedHold::new(in_loss_events(), HOLD_TICKS);
 
     loop {
-        if hold.step(in_silence_packets()) {
+        if hold.step(in_loss_events()) {
             led.set_high();
         } else {
             led.set_low();
