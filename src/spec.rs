@@ -35,6 +35,7 @@ pub(crate) const PCM_FORMATS: &[PcmFormat] = &[
 ];
 
 pub(crate) const FORMAT_COUNT: usize = PCM_FORMATS.len();
+pub(crate) const FORMAT_RATE_COUNT: usize = format_rate_count();
 pub(crate) const MAX_AUDIO_PACKET_BYTES: usize = max_audio_packet_bytes();
 pub(crate) const MAX_RATES_PER_FORMAT: usize = max_rates_per_format();
 pub(crate) const FORMAT_DESCRIPTOR_CAPACITY: usize = 6 + 3 * MAX_RATES_PER_FORMAT;
@@ -84,6 +85,14 @@ impl PcmFormat {
 
     pub(crate) fn supports(self, rate: SampleRate) -> bool {
         self.rates.contains(&rate)
+    }
+
+    pub(crate) fn default_rate(self) -> SampleRate {
+        if self.supports(DEFAULT_RATE) {
+            DEFAULT_RATE
+        } else {
+            self.min_rate()
+        }
     }
 
     pub(crate) const fn max_rate(self) -> SampleRate {
@@ -149,130 +158,10 @@ impl SampleRate {
             _ => None,
         }
     }
-
-    const fn code(self) -> u8 {
-        self as u8
-    }
-
-    const fn from_code(code: u8) -> Self {
-        match code & 0x0f {
-            0 => Self::R44100,
-            1 => Self::R48000,
-            2 => Self::R88200,
-            3 => Self::R96000,
-            _ => DEFAULT_RATE,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct StreamSelection {
-    alternate_setting: u8,
-    rate: SampleRate,
-}
-
-impl StreamSelection {
-    pub(crate) const fn inactive() -> Self {
-        Self {
-            alternate_setting: 0,
-            rate: DEFAULT_RATE,
-        }
-    }
-
-    pub(crate) const fn new(alternate_setting: u8, rate: SampleRate) -> Self {
-        Self {
-            alternate_setting,
-            rate,
-        }
-    }
-
-    pub(crate) const fn alternate_setting(self) -> u8 {
-        self.alternate_setting
-    }
-
-    pub(crate) const fn rate(self) -> SampleRate {
-        self.rate
-    }
-
-    pub(crate) fn format(self) -> Option<&'static PcmFormat> {
-        format_by_alternate_setting(self.alternate_setting)
-    }
-
-    const fn encode(self) -> u8 {
-        (self.rate.code() << 4) | (self.alternate_setting & 0x0f)
-    }
-
-    const fn decode(bits: u8) -> Self {
-        Self::new(bits & 0x0f, SampleRate::from_code(bits >> 4))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DuplexSelection {
-    pub(crate) playback: StreamSelection,
-    pub(crate) capture: StreamSelection,
-}
-
-impl DuplexSelection {
-    pub(crate) const fn inactive() -> Self {
-        Self {
-            playback: StreamSelection::inactive(),
-            capture: StreamSelection::inactive(),
-        }
-    }
-
-    pub(crate) fn loopback_enabled(self) -> bool {
-        self.playback.alternate_setting != 0
-            && self.playback.alternate_setting == self.capture.alternate_setting
-            && self.playback.rate == self.capture.rate
-    }
-
-    pub(crate) const fn stream(self, direction: StreamDirection) -> StreamSelection {
-        match direction {
-            StreamDirection::Playback => self.playback,
-            StreamDirection::Capture => self.capture,
-        }
-    }
-
-    pub(crate) const fn with_stream(
-        mut self,
-        direction: StreamDirection,
-        stream: StreamSelection,
-    ) -> Self {
-        match direction {
-            StreamDirection::Playback => self.playback = stream,
-            StreamDirection::Capture => self.capture = stream,
-        }
-        self
-    }
-
-    pub(crate) const fn encode(self) -> u32 {
-        (self.playback.encode() as u32) | ((self.capture.encode() as u32) << 8)
-    }
-
-    pub(crate) const fn decode(bits: u32) -> Self {
-        Self {
-            playback: StreamSelection::decode((bits & 0xff) as u8),
-            capture: StreamSelection::decode(((bits >> 8) & 0xff) as u8),
-        }
-    }
-}
-
-pub(crate) fn format_by_alternate_setting(alternate_setting: u8) -> Option<&'static PcmFormat> {
-    format_slot_by_alternate_setting(alternate_setting).and_then(format_by_endpoint_slot)
 }
 
 pub(crate) fn format_by_endpoint_slot(slot: usize) -> Option<&'static PcmFormat> {
     PCM_FORMATS.get(slot)
-}
-
-#[allow(clippy::cast_possible_truncation)]
-pub(crate) const fn alternate_setting_for_slot(slot: usize) -> Option<u8> {
-    if slot < FORMAT_COUNT {
-        Some(slot as u8 + 1)
-    } else {
-        None
-    }
 }
 
 pub(crate) const fn format_slot_by_alternate_setting(alternate_setting: u8) -> Option<usize> {
@@ -283,14 +172,24 @@ pub(crate) const fn format_slot_by_alternate_setting(alternate_setting: u8) -> O
     }
 }
 
-pub(crate) fn rate_or_default_for_format(rate: SampleRate, format: &PcmFormat) -> SampleRate {
-    if format.supports(rate) {
-        rate
-    } else if format.supports(DEFAULT_RATE) {
-        DEFAULT_RATE
-    } else {
-        format.min_rate()
+pub(crate) fn audio_queue_index(format_slot: usize, rate: SampleRate) -> Option<usize> {
+    let format = format_by_endpoint_slot(format_slot)?;
+    let mut offset = 0;
+    let mut slot = 0;
+    while slot < format_slot {
+        offset += PCM_FORMATS[slot].rates.len();
+        slot += 1;
     }
+
+    let mut rate_slot = 0;
+    while rate_slot < format.rates.len() {
+        if format.rates[rate_slot] == rate {
+            return Some(offset + rate_slot);
+        }
+        rate_slot += 1;
+    }
+
+    None
 }
 
 const fn max_audio_packet_bytes() -> usize {
@@ -304,6 +203,16 @@ const fn max_audio_packet_bytes() -> usize {
         slot += 1;
     }
     maximum
+}
+
+const fn format_rate_count() -> usize {
+    let mut total = 0;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        total += PCM_FORMATS[slot].rates.len();
+        slot += 1;
+    }
+    total
 }
 
 const fn max_rates_per_format() -> usize {

@@ -8,15 +8,15 @@ use crate::control::AudioControl;
 use crate::descriptors::{AudioEndpoints, build_audio_function};
 use crate::diagnostics::fallback_led_task;
 use crate::streams::{
-    AudioQueues, AudioReceiver, AudioSender, StreamState, capture_task, init_audio_queues,
-    playback_task,
+    AudioQueues, EndpointRateReceiver, EndpointRateWatches, capture_task, init_audio_queues,
+    init_endpoint_rate_watches, playback_task,
 };
-
-static STREAM_STATE: StreamState = StreamState::new();
 
 pub(crate) fn run(spawner: Spawner) {
     let peripherals = embassy_rp::init(embassy_rp::config::Config::default());
     let driver = board::usb_driver(peripherals.USB);
+    let rates = init_endpoint_rate_watches();
+    let queues = init_audio_queues();
 
     let config_descriptor = {
         static CELL: StaticCell<[u8; crate::spec::CONFIG_DESCRIPTOR_CAPACITY]> = StaticCell::new();
@@ -48,11 +48,11 @@ pub(crate) fn run(spawner: Spawner) {
     let control_map = endpoints.control_map();
     let handler = {
         static CELL: StaticCell<AudioControl> = StaticCell::new();
-        CELL.init(AudioControl::new(&STREAM_STATE, control_map))
+        CELL.init(AudioControl::new(rates, control_map))
     };
     builder.handler(handler);
 
-    spawn_usb(spawner, builder.build(), endpoints, init_audio_queues());
+    spawn_usb(spawner, builder.build(), endpoints, rates, queues);
     spawner.spawn(fallback_led_task(peripherals.PIN_25).unwrap());
 }
 
@@ -69,23 +69,21 @@ fn spawn_usb(
     spawner: Spawner,
     usb_device: usb::UsbDevice<'static, UsbDriver>,
     endpoints: AudioEndpoints<'static, UsbDriver>,
-    queues: &'static mut AudioQueues,
+    rates: &'static EndpointRateWatches,
+    queues: &'static AudioQueues,
 ) {
     let playback = endpoints.playback;
     let capture = endpoints.capture;
-    let queue_ends = queues.each_mut().map(|queue| queue.split());
 
     spawner.spawn(usb_task(usb_device).unwrap());
     // Each endpoint keeps a persistent task. This avoids dynamically dispatching
     // or cancelling endpoint futures when the host changes alternate settings.
-    for (slot, ((playback, capture), (sender, receiver))) in playback
-        .into_iter()
-        .zip(capture)
-        .zip(queue_ends)
-        .enumerate()
-    {
-        spawner.spawn(playback_endpoint_task(slot, playback, sender).unwrap());
-        spawner.spawn(capture_endpoint_task(slot, capture, receiver).unwrap());
+    for (slot, (playback, capture)) in playback.into_iter().zip(capture).enumerate() {
+        let rate_updates = rates
+            .capture_receiver(slot)
+            .expect("one rate receiver exists for each capture endpoint");
+        spawner.spawn(playback_endpoint_task(slot, playback, rates, queues).unwrap());
+        spawner.spawn(capture_endpoint_task(slot, capture, rate_updates, queues).unwrap());
     }
 }
 
@@ -98,16 +96,18 @@ async fn usb_task(mut usb_device: usb::UsbDevice<'static, UsbDriver>) {
 async fn playback_endpoint_task(
     slot: usize,
     endpoint: <UsbDriver as Driver<'static>>::EndpointOut,
-    sender: AudioSender,
+    rates: &'static EndpointRateWatches,
+    queues: &'static AudioQueues,
 ) {
-    playback_task::<UsbDriver>(slot, endpoint, &STREAM_STATE, sender).await;
+    playback_task::<UsbDriver>(slot, endpoint, rates, queues).await;
 }
 
 #[embassy_executor::task(pool_size = crate::spec::FORMAT_COUNT)]
 async fn capture_endpoint_task(
     slot: usize,
     endpoint: <UsbDriver as Driver<'static>>::EndpointIn,
-    receiver: AudioReceiver,
+    rate_updates: EndpointRateReceiver,
+    queues: &'static AudioQueues,
 ) {
-    capture_task::<UsbDriver>(slot, endpoint, &STREAM_STATE, receiver).await;
+    capture_task::<UsbDriver>(slot, endpoint, rate_updates, queues).await;
 }

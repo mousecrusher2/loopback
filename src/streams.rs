@@ -1,236 +1,239 @@
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::cell::RefCell;
 
+use embassy_sync::blocking_mutex::ThreadModeMutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::zerocopy_channel::{Channel, Receiver, Sender};
+use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
-use heapless::Vec;
-use static_cell::{ConstStaticCell, StaticCell};
+use heapless::{Deque, Vec};
+use static_cell::StaticCell;
 
 use crate::diagnostics;
-use crate::spec::{
-    self, DEFAULT_RATE, DuplexSelection, SampleRate, StreamDirection, StreamSelection,
-};
+use crate::spec::{self, DEFAULT_RATE, SampleRate, StreamDirection};
 
 pub(crate) type AudioPacket = Vec<u8, { spec::MAX_AUDIO_PACKET_BYTES }>;
 
-// A queue per format keeps every grant tied to one frame width and endpoint MPS.
-// NoopRawMutex is valid because both halves stay on the same thread-mode executor;
-// no interrupt handler or second core accesses these channels.
-// See docs/uac1-design.md for the transition and clearing policy.
-pub(crate) type AudioQueue = Channel<'static, NoopRawMutex, AudioPacket>;
-pub(crate) type AudioQueues = [AudioQueue; spec::FORMAT_COUNT];
-pub(crate) type AudioSender = Sender<'static, NoopRawMutex, AudioPacket>;
-pub(crate) type AudioReceiver = Receiver<'static, NoopRawMutex, AudioPacket>;
-
-pub(crate) fn init_audio_queues() -> &'static mut AudioQueues {
-    static PACKETS: ConstStaticCell<
-        [[AudioPacket; spec::PACKET_QUEUE_CAPACITY]; spec::FORMAT_COUNT],
-    > = ConstStaticCell::new(
-        [const { [const { AudioPacket::new() }; spec::PACKET_QUEUE_CAPACITY] }; spec::FORMAT_COUNT],
-    );
-    static QUEUES: StaticCell<AudioQueues> = StaticCell::new();
-
-    let packet_queues = PACKETS.take();
-    QUEUES.init(
-        packet_queues
-            .each_mut()
-            .map(|packets| AudioQueue::new(&mut packets[..])),
-    )
+// All accesses stay on core 0's thread-mode executor. ThreadModeMutex does not
+// provide exclusion against RP2350 core 1 or interrupt-context access.
+pub(crate) struct AudioQueue {
+    packets: ThreadModeMutex<RefCell<Deque<AudioPacket, { spec::PACKET_QUEUE_CAPACITY }>>>,
 }
 
-pub(crate) struct StreamState {
-    encoded: AtomicU32,
-}
-
-impl StreamState {
-    pub(crate) const fn new() -> Self {
+impl AudioQueue {
+    const fn new() -> Self {
         Self {
-            encoded: AtomicU32::new(DuplexSelection::inactive().encode()),
+            packets: ThreadModeMutex::new(RefCell::new(Deque::new())),
         }
+    }
+
+    fn push(&self, packet: AudioPacket) {
+        self.packets.lock(|packets| {
+            let mut packets = packets.borrow_mut();
+            if let Err(packet) = packets.push_back(packet) {
+                assert!(packets.pop_front().is_some());
+                assert!(packets.push_back(packet).is_ok());
+            }
+        });
+    }
+
+    fn pop(&self) -> Option<AudioPacket> {
+        self.packets
+            .lock(|packets| packets.borrow_mut().pop_front())
+    }
+
+    fn clear(&self) {
+        self.packets.lock(|packets| packets.borrow_mut().clear());
+    }
+}
+
+pub(crate) type AudioQueues = [AudioQueue; spec::FORMAT_RATE_COUNT];
+
+pub(crate) type EndpointRateWatch = Watch<NoopRawMutex, EndpointRate, 1>;
+pub(crate) type EndpointRateReceiver = WatchReceiver<'static, NoopRawMutex, EndpointRate, 1>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EndpointRate {
+    Unset,
+    Configured(SampleRate),
+}
+
+// Every physical endpoint owns an independent value and change generation.
+// The watches are grouped only for lookup; they do not form a coherent duplex
+// snapshot. NoopRawMutex is valid while all users remain on this executor.
+pub(crate) struct EndpointRateWatches {
+    playback: [EndpointRateWatch; spec::FORMAT_COUNT],
+    capture: [EndpointRateWatch; spec::FORMAT_COUNT],
+}
+
+impl EndpointRateWatches {
+    const fn new() -> Self {
+        Self {
+            playback: [const { EndpointRateWatch::new_with(EndpointRate::Unset) };
+                spec::FORMAT_COUNT],
+            capture: [const { EndpointRateWatch::new_with(EndpointRate::Unset) };
+                spec::FORMAT_COUNT],
+        }
+    }
+
+    pub(crate) fn current(&self, direction: StreamDirection, slot: usize) -> Option<EndpointRate> {
+        self.watch(direction, slot)?.try_get()
+    }
+
+    pub(crate) fn set(&self, direction: StreamDirection, slot: usize, rate: EndpointRate) -> bool {
+        let Some(watch) = self.watch(direction, slot) else {
+            return false;
+        };
+        watch.sender().send(rate);
+        true
+    }
+
+    pub(crate) fn notify(&self, direction: StreamDirection, slot: usize) -> bool {
+        let Some(current) = self.current(direction, slot) else {
+            return false;
+        };
+        self.set(direction, slot, current)
     }
 
     pub(crate) fn reset(&self) {
-        self.encoded
-            .store(DuplexSelection::inactive().encode(), Ordering::Relaxed);
-    }
-
-    pub(crate) fn snapshot(&self) -> DuplexSelection {
-        DuplexSelection::decode(self.encoded.load(Ordering::Relaxed))
-    }
-
-    pub(crate) fn set_alternate_setting(
-        &self,
-        direction: StreamDirection,
-        alternate_setting: u8,
-    ) -> bool {
-        if alternate_setting != 0 && spec::format_by_alternate_setting(alternate_setting).is_none()
-        {
-            return false;
+        for watch in &self.playback {
+            watch.sender().send(EndpointRate::Unset);
         }
-
-        self.update(direction, |current| {
-            let selected = StreamSelection::new(alternate_setting, current.rate());
-            Some(selected.format().map_or(selected, |format| {
-                StreamSelection::new(
-                    alternate_setting,
-                    spec::rate_or_default_for_format(current.rate(), format),
-                )
-            }))
-        })
+        for watch in &self.capture {
+            watch.sender().send(EndpointRate::Unset);
+        }
     }
 
-    pub(crate) fn set_rate(&self, direction: StreamDirection, rate: SampleRate) -> bool {
-        self.update(direction, |current| {
-            if current.format().is_none_or(|format| format.supports(rate)) {
-                Some(StreamSelection::new(current.alternate_setting(), rate))
-            } else {
-                None
-            }
-        })
+    pub(crate) fn capture_receiver(&'static self, slot: usize) -> Option<EndpointRateReceiver> {
+        self.capture.get(slot)?.receiver()
     }
 
-    fn update(
+    pub(crate) fn watch(
         &self,
         direction: StreamDirection,
-        mut select: impl FnMut(StreamSelection) -> Option<StreamSelection>,
-    ) -> bool {
-        self.encoded
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
-                let selection = DuplexSelection::decode(bits);
-                let stream = select(selection.stream(direction))?;
-                Some(selection.with_stream(direction, stream).encode())
-            })
-            .is_ok()
+        slot: usize,
+    ) -> Option<&EndpointRateWatch> {
+        match direction {
+            StreamDirection::Playback => self.playback.get(slot),
+            StreamDirection::Capture => self.capture.get(slot),
+        }
     }
+}
+
+pub(crate) fn init_audio_queues() -> &'static AudioQueues {
+    static QUEUES: StaticCell<AudioQueues> = StaticCell::new();
+    QUEUES.init(core::array::from_fn(|_| AudioQueue::new()))
+}
+
+pub(crate) fn init_endpoint_rate_watches() -> &'static EndpointRateWatches {
+    static WATCHES: StaticCell<EndpointRateWatches> = StaticCell::new();
+    WATCHES.init(EndpointRateWatches::new())
 }
 
 pub(crate) async fn playback_task<'d, D: Driver<'d>>(
     slot: usize,
     mut endpoint: D::EndpointOut,
-    state: &'static StreamState,
-    mut sender: AudioSender,
+    rates: &'static EndpointRateWatches,
+    queues: &'static AudioQueues,
 ) {
     let format =
         spec::format_by_endpoint_slot(slot).expect("playback task has a valid format slot");
-    let alternate_setting =
-        spec::alternate_setting_for_slot(slot).expect("playback task has an alternate setting");
     let max_packet_size = format.max_packet_size() as usize;
-    let mut discard = [0_u8; spec::MAX_AUDIO_PACKET_BYTES];
 
-    // Endpoint I/O is deliberately allowed to finish across a state change: the
-    // generic endpoint traits do not specify their post-cancellation state.
+    // The destination rate is chosen only after the OUT read completes. This
+    // also handles an endpoint read that remains pending across disable/re-enable.
     loop {
         endpoint.wait_enabled().await;
-        loop {
-            let selection = state.snapshot();
-            if selection.playback.alternate_setting() != alternate_setting {
-                break;
-            }
 
-            if !selection.loopback_enabled() {
-                match endpoint.read(&mut discard[..max_packet_size]).await {
-                    Ok(_) => {}
-                    Err(EndpointError::Disabled) => break,
-                    Err(EndpointError::BufferOverflow) => return,
-                }
-                continue;
-            }
+        let mut packet = AudioPacket::new();
+        packet
+            .resize(max_packet_size, 0)
+            .expect("format MPS fits the audio packet");
+        let len = match endpoint.read(packet.as_mut_slice()).await {
+            Ok(len) => len,
+            Err(EndpointError::Disabled) => continue,
+            Err(EndpointError::BufferOverflow) => return,
+        };
 
-            // Isochronous OUT has no retry/backpressure mechanism. Keep servicing
-            // the endpoint and drop the newest packet when all grants are busy.
-            let Some(packet) = sender.try_send() else {
-                match endpoint.read(&mut discard[..max_packet_size]).await {
-                    Ok(_) => {}
-                    Err(EndpointError::Disabled) => break,
-                    Err(EndpointError::BufferOverflow) => return,
-                }
-                continue;
-            };
-
-            // Vec length is the queued payload length. Expand it only when the
-            // slot becomes an OUT receive buffer again.
-            packet
-                .resize(max_packet_size, 0)
-                .expect("format MPS fits the audio packet");
-            match endpoint.read(packet.as_mut_slice()).await {
-                Ok(len) => {
-                    // Do not publish a grant completed while loopback was being
-                    // disabled or this alternate was being deselected.
-                    let selection = state.snapshot();
-                    if selection.playback.alternate_setting() != alternate_setting {
-                        break;
-                    }
-                    if selection.loopback_enabled()
-                        && len != 0
-                        && len.is_multiple_of(format.audio_frame_bytes())
-                    {
-                        packet.truncate(len);
-                        sender.send_done();
-                    }
-                }
-                Err(EndpointError::Disabled) => break,
-                Err(EndpointError::BufferOverflow) => return,
-            }
+        if len == 0 || !len.is_multiple_of(format.audio_frame_bytes()) {
+            continue;
         }
+        let Some(EndpointRate::Configured(rate)) = rates.current(StreamDirection::Playback, slot)
+        else {
+            continue;
+        };
+        let Some(queue) = audio_queue(queues, slot, rate) else {
+            continue;
+        };
+
+        packet.truncate(len);
+        queue.push(packet);
     }
 }
 
 pub(crate) async fn capture_task<'d, D: Driver<'d>>(
     slot: usize,
     mut endpoint: D::EndpointIn,
-    state: &'static StreamState,
-    mut receiver: AudioReceiver,
+    mut rate_updates: EndpointRateReceiver,
+    queues: &'static AudioQueues,
 ) {
     let format = spec::format_by_endpoint_slot(slot).expect("capture task has a valid format slot");
-    let alternate_setting =
-        spec::alternate_setting_for_slot(slot).expect("capture task has an alternate setting");
+    let mut current_rate = rate_updates.try_get().unwrap_or(EndpointRate::Unset);
     let mut silence = [0_u8; spec::MAX_AUDIO_PACKET_BYTES];
     let mut clock = PacketClock::new();
 
-    // As in playback_task, never cancel an in-flight endpoint operation merely
-    // because a control request changed the selected alternate or rate.
+    apply_capture_rate(queues, slot, current_rate, &mut clock);
+
+    // One endpoint operation is started per wait_enabled() pass. A control
+    // change never cancels an operation already handed to the USB driver.
     loop {
         endpoint.wait_enabled().await;
-        loop {
-            let selection = state.snapshot();
-            if selection.capture.alternate_setting() != alternate_setting {
-                drain_packets(&mut receiver);
-                break;
-            }
 
-            if selection.loopback_enabled()
-                && let Some(packet) = receiver.try_receive()
-            {
-                let write_result = endpoint.write(packet.as_slice()).await;
-                receiver.receive_done();
-                match write_result {
-                    Ok(()) => continue,
-                    Err(EndpointError::Disabled) => break,
+        if let Some(updated) = rate_updates.try_changed() {
+            current_rate = updated;
+            apply_capture_rate(queues, slot, current_rate, &mut clock);
+        }
+
+        if let EndpointRate::Configured(rate) = current_rate {
+            let queue = audio_queue(queues, slot, rate)
+                .expect("configured endpoint rate has an audio queue");
+            if let Some(packet) = queue.pop() {
+                match endpoint.write(packet.as_slice()).await {
+                    Ok(()) | Err(EndpointError::Disabled) => continue,
                     Err(EndpointError::BufferOverflow) => return,
                 }
             }
 
-            if !selection.loopback_enabled() {
-                drain_packets(&mut receiver);
-            }
-
-            let len = clock.next_len(selection.capture.rate(), format.audio_frame_bytes());
+            let len = clock.next_len(rate, format.audio_frame_bytes());
             diagnostics::record_in_silence();
             silence[..len].fill(0);
             match endpoint.write(&silence[..len]).await {
-                Ok(()) => {}
-                Err(EndpointError::Disabled) => break,
+                Ok(()) | Err(EndpointError::Disabled) => {}
+                Err(EndpointError::BufferOverflow) => return,
+            }
+        } else {
+            diagnostics::record_in_silence();
+            match endpoint.write(&[]).await {
+                Ok(()) | Err(EndpointError::Disabled) => {}
                 Err(EndpointError::BufferOverflow) => return,
             }
         }
     }
 }
 
-fn drain_packets(receiver: &mut AudioReceiver) {
-    // clear() can reset indices while the other half owns a grant across await.
-    // Drain only committed receiver grants and leave uncommitted grants alone.
-    while receiver.try_receive().is_some() {
-        receiver.receive_done();
+fn audio_queue(queues: &AudioQueues, format_slot: usize, rate: SampleRate) -> Option<&AudioQueue> {
+    spec::audio_queue_index(format_slot, rate).and_then(|index| queues.get(index))
+}
+
+fn apply_capture_rate(
+    queues: &AudioQueues,
+    format_slot: usize,
+    rate: EndpointRate,
+    clock: &mut PacketClock,
+) {
+    clock.reset();
+    if let EndpointRate::Configured(rate) = rate {
+        audio_queue(queues, format_slot, rate)
+            .expect("configured endpoint rate has an audio queue")
+            .clear();
     }
 }
 
@@ -247,6 +250,11 @@ impl PacketClock {
             frame_bytes: 0,
             accumulator: 0,
         }
+    }
+
+    fn reset(&mut self) {
+        self.frame_bytes = 0;
+        self.accumulator = 0;
     }
 
     fn next_len(&mut self, rate: SampleRate, frame_bytes: usize) -> usize {
@@ -266,26 +274,72 @@ impl PacketClock {
 #[cfg(test)]
 #[embedded_test::tests]
 mod tests {
-    use super::{PacketClock, StreamState};
-    use crate::spec::{
-        SampleRate, StreamDirection, alternate_setting_for_slot, format_by_endpoint_slot,
-    };
+    use super::{AudioPacket, AudioQueue, EndpointRate, EndpointRateWatches, PacketClock};
+    use crate::spec::{self, SampleRate, StreamDirection, format_by_endpoint_slot};
 
-    #[test]
-    fn unsupported_rate_does_not_change_state() {
-        let state = StreamState::new();
-        state.set_alternate_setting(
-            StreamDirection::Capture,
-            alternate_setting_for_slot(2).unwrap(),
-        );
-        let before = state.snapshot();
-
-        assert!(!state.set_rate(StreamDirection::Capture, SampleRate::R96000));
-        assert_eq!(state.snapshot(), before);
+    fn packet(value: u8) -> AudioPacket {
+        let mut packet = AudioPacket::new();
+        packet.push(value).unwrap();
+        packet
     }
 
     #[test]
-    fn packet_clock_emits_fractional_cadence() {
+    fn full_queue_discards_only_the_oldest_packet() {
+        let queue = AudioQueue::new();
+        for value in 0..=spec::PACKET_QUEUE_CAPACITY {
+            queue.push(packet(u8::try_from(value).unwrap()));
+        }
+
+        for value in 1..=spec::PACKET_QUEUE_CAPACITY {
+            assert_eq!(
+                queue.pop().unwrap().as_slice(),
+                &[u8::try_from(value).unwrap()]
+            );
+        }
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn endpoint_rates_are_independent_and_same_value_notifies() {
+        let rates = EndpointRateWatches::new();
+        let mut capture = rates.capture[0].receiver().unwrap();
+        assert_eq!(capture.try_get(), Some(EndpointRate::Unset));
+
+        let configured = EndpointRate::Configured(SampleRate::R44100);
+        assert!(rates.set(StreamDirection::Capture, 0, configured));
+        assert_eq!(capture.try_changed(), Some(configured));
+        assert_eq!(
+            rates.current(StreamDirection::Playback, 0),
+            Some(EndpointRate::Unset)
+        );
+
+        assert!(rates.notify(StreamDirection::Capture, 0));
+        assert_eq!(capture.try_changed(), Some(configured));
+
+        rates.reset();
+        assert_eq!(capture.try_changed(), Some(EndpointRate::Unset));
+        assert_eq!(
+            rates.current(StreamDirection::Playback, 1),
+            Some(EndpointRate::Unset)
+        );
+    }
+
+    #[test]
+    fn advertised_format_rates_have_unique_queues() {
+        let mut seen = [false; spec::FORMAT_RATE_COUNT];
+        for (format_slot, format) in spec::PCM_FORMATS.iter().enumerate() {
+            for &rate in format.rates {
+                let queue = spec::audio_queue_index(format_slot, rate).unwrap();
+                assert!(!seen[queue]);
+                seen[queue] = true;
+            }
+        }
+        assert!(seen.into_iter().all(|value| value));
+        assert_eq!(spec::audio_queue_index(2, SampleRate::R96000), None);
+    }
+
+    #[test]
+    fn packet_clock_emits_fractional_cadence_and_resets() {
         let format = format_by_endpoint_slot(0).unwrap();
         let frame_bytes = format.audio_frame_bytes();
         let mut clock = PacketClock::new();
@@ -298,5 +352,10 @@ mod tests {
         }
 
         assert_eq!(total, 441 * frame_bytes);
+        clock.reset();
+        assert_eq!(
+            clock.next_len(SampleRate::R44100, frame_bytes),
+            44 * frame_bytes
+        );
     }
 }

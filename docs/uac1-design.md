@@ -22,12 +22,12 @@ to be selected automatically as the default render device. These classifications
 affect host policy only; the firmware still transfers digital PCM unchanged.
 There is no USB serial string.
 
-When both streaming interfaces select the same alternate setting and sample
-rate, each complete OUT isochronous payload is queued and returned unchanged by
-the corresponding IN endpoint. The firmware does not resample, split, merge, or
-pad normal loopback packets. When the selections do not match, or no queued
-packet is available, IN sends digital silence. It never reinterprets bytes from
-one PCM width as another.
+Every advertised `(PCM format, sample rate)` combination has an independent
+packet queue. After an OUT read completes, the payload is queued under that
+physical endpoint's current rate. An IN endpoint reads only the queue for its
+own format and current rate. The firmware does not resample, split, merge, or
+pad normal loopback packets. If that queue is empty, IN sends digital silence.
+It never reinterprets bytes from one PCM width or rate as another.
 
 The host is trusted to packetize OUT according to the selected rate. The one
 structural check made by the device is that a non-empty OUT payload contains a
@@ -107,79 +107,101 @@ That case is accepted because silence is an exceptional fallback: a stable
 stream is expected to remain queued rather than alternate continuously between
 audio and silence.
 
-## Endpoint tasks and zero-copy queues
+## Endpoint tasks and packet queues
 
 Every nonzero format alternate has its own OUT endpoint task, IN endpoint task,
-and `zerocopy_channel`. A task's PCM width, frame size, and MPS are fixed when it
-is spawned. This prevents an inactive endpoint task from accidentally using the
-new global selection's larger MPS. Such a mismatch can make an endpoint return
-`BufferOverflow` immediately and create an executor-starving retry loop.
+and physical endpoint. A task's PCM width, frame size, and MPS are fixed when it
+is spawned. This prevents an inactive endpoint task from using another format's
+larger MPS. Such a mismatch can make an endpoint return `BufferOverflow`
+immediately and create an executor-starving retry loop.
 
 A single dynamic dispatcher is intentionally not used. Persistent per-endpoint
-tasks fit Embassy's execution model, separate format queues make the ownership
-simple, and RP2350 has ample RAM for them.
+tasks fit Embassy's execution model, and RP2350 has ample RAM for them. The ten
+advertised format/rate combinations map to ten bounded `AudioQueue` instances.
+Each queue wraps a `heapless::Deque` in a `ThreadModeMutex<RefCell<_>>` and
+exposes only synchronous `push`, `pop`, and `clear` operations. The mapping and
+queue count are derived from `PCM_FORMATS`.
 
-The channels use `NoopRawMutex`. Both halves are owned by tasks spawned on the
-same thread-mode executor, and USB interrupts only wake endpoint futures; no
-interrupt handler or second core accesses channel state. `NoopRawMutex` being
-`!Sync` expresses this restriction. If either half is later moved to another
-executor, an interrupt, or RP2350 core 1, the mutex type must be changed to one
-that provides the corresponding cross-context synchronization.
+Both endpoint tasks run on the same core 0 thread-mode executor, and USB
+interrupts only wake endpoint futures; no interrupt handler or RP2350 core 1
+accesses queue state. `ThreadModeMutex` relies on this single-core restriction
+and does not provide cross-core exclusion. If a queue is later accessed from an
+interrupt or core 1, its synchronization must be replaced.
 
-The channel stores preallocated `heapless::Vec` packet slots. OUT reads directly
-into a sender grant and IN writes directly from a receiver grant, avoiding a
-move of an owned packet through a conventional channel. `heapless::Vec` remains
-the packet representation because it already provides fixed-capacity storage
-with a runtime payload length.
+Each queue stores owned `heapless::Vec` packets with a fixed 582-byte capacity
+and runtime payload length. OUT must read into a task-local packet before it can
+observe the rate that won the control/read ordering and choose a destination
+queue. Moving the packet into the queue and later into the IN task adds two
+full inline-packet moves, approximately 1.18 MB/s at one packet per millisecond.
+That load is accepted for RP2350. A later optimization may store handles to a
+static packet pool in the queues, but that ownership protocol is not
+part of this implementation.
 
-Each format queue has eight slots. Capacity does not add latency while OUT and
-IN advance at the same rate; normal depth is determined by their frame phase.
-Eight slots instead bound the backlog left by a short interval in which IN stops
-while OUT continues. A capacity of one would also prevent OUT from using another
-slot while Capture holds its receiver grant across an IN write.
+Each format/rate queue has eight slots. Capacity does not add latency while
+OUT and IN advance at the same rate; normal depth is determined by their frame
+phase. Eight slots bound the backlog left by a short interval in which IN stops
+while OUT continues. Packet storage for all ten queues is approximately
+47 KiB.
 
-Isochronous OUT cannot be backpressured and retried. If a format's queue is
-full, the task still services the endpoint and discards the newly arrived
-packet. `BufferOverflow` is treated as a broken internal MPS invariant and the
-affected task exits instead of retrying an error that may complete immediately.
+Isochronous OUT cannot be backpressured and retried. `AudioQueue::push` removes
+exactly the oldest packet when the queue is full, then inserts the newly received
+packet within one synchronous borrow. The queue therefore retains the newest eight
+packets, although up to seven packets of latency can remain after IN resumes.
+USB `BufferOverflow` is treated as a broken internal MPS invariant and the
+affected task exits.
 
 ## Alternate and rate transitions
 
-Format isolation is strict, but transition freshness is deliberately
-best-effort. The implementation does not attach generation numbers to packets
-and does not promise a hard flush barrier. A bounded number of committed or
-in-flight packets can survive if both control changes complete before the
-endpoint tasks observe the intermediate mismatch, or if the host later returns
-to the same format. That stale data is accepted for this loopback. Packets are
-never transferred to a different format's queue, so a transition can never
-reinterpret one PCM width as another.
+Each physical endpoint has its own `Watch` containing either `Unset` or its
+configured rate. The watches are independent; there is no duplex snapshot or
+stored active alternate. `SET_CUR` updates only the addressed endpoint. An
+unconfigured OUT endpoint services and discards packets, while an unconfigured
+IN endpoint sends ZLPs.
 
-`zerocopy_channel::clear()` is not used. Although `clear()` itself is
-synchronous, a sender or receiver can hold a mutable slot grant across an
-endpoint `await`. Resetting channel indices from the other half while such a
-grant exists does not provide the quiescence protocol needed here. The receiver
-instead drains committed packets with `receive_done()`, while uncommitted sender
-grants are simply not published.
+Capture observes its endpoint Watch generation. On any notification it resets
+the silence clock and, if a rate is configured, clears only the queue for the
+new `(format, rate)`. Other rate queues remain untouched and are cleared when
+they are later selected. Selecting a nonzero alternate re-sends that endpoint's
+current Watch value, so reopening at the same rate also triggers this local
+clear. The queues own their values, making `clear()` safe even while an
+IN task owns a packet it already removed.
 
 Endpoint `read` and `write` futures are also not cancelled on a control-state
 change. The generic Embassy USB endpoint traits do not specify the logical
-state left by cancellation. Each persistent endpoint task lets an in-flight
-operation finish, then rechecks the selected alternate/rate before publishing or
-continuing. This intentionally permits a boundary packet rather than depending
-on driver-specific cancellation behavior.
+state left by cancellation. Every transfer begins with `wait_enabled()`, but an
+in-flight operation is allowed to finish. OUT chooses its destination using the
+endpoint rate observed after the read. IN applies a Watch notification before
+its next transfer. A packet already removed by IN, or published by a completing
+OUT read immediately after a clear, can therefore cross the transition as the
+accepted best-effort boundary packet.
 
-Loopback is enabled only while both directions have the same nonzero alternate
-setting and rate. During the usual host sequence, the host closes a stream (or
-selects alternate 0), changes controls, and reopens it. UAC1 also permits less
-orderly active-stream Sampling Frequency Control changes; this firmware does
-not implement a transactional protocol for that unusual sequence. Unsupported
+A supported reconfiguration must quiesce the affected isochronous submissions
+before `SET_CUR` and resume them only after the control sequence is complete.
+Passing through alternate setting 0 is the cleanest sequence but is not
+required. A host may switch directly between nonzero alternates, or leave the
+same nonzero alternate selected while its URBs are stopped and change that
+endpoint's rate with `SET_CUR`. The device cannot observe the host's URB queue
+directly, so quiescence is a host-side requirement rather than a state the
+firmware verifies.
+
+These paths are best-effort rather than transactional. The firmware does not
+cancel endpoint I/O or clear controller DPRAM, so a packet already owned by an
+endpoint task or controller buffer may cross the transition. That boundary
+packet is accepted, but streaming should resume using the newly selected
+format and rate. A host that continues submitting isochronous transfers across
+`SET_CUR` is explicitly unsupported. Requiring the transfers to stop still
+leaves room for a future controller-specific abort and DPRAM flush to provide a
+strict boundary without also supporting live-stream `SET_CUR`. Unsupported
 rates and rates not advertised by the addressed endpoint are rejected.
 
 The class-specific endpoint descriptor advertises Sampling Frequency Control.
-`SET_CUR` changes the per-direction rate state, while `GET_CUR`, `GET_MIN`,
-`GET_MAX`, and `GET_RES` return three-byte little-endian frequency values. Rate
-state is not stored independently for every inactive endpoint; the conventional
-close/configure/reopen host sequence is the compatibility target.
+`SET_CUR` changes the addressed physical endpoint's Watch. `GET_CUR` returns its
+current value; if it is `Unset`, `GET_CUR` atomically establishes and returns the
+format default (currently 48 kHz). `GET_MIN`, `GET_MAX`, and `GET_RES` return
+three-byte little-endian frequency values without changing state. Inactive
+endpoints retain independent settings. Both the conventional alternate-0
+close/configure/reopen sequence and stopped-URB reconfiguration without an
+explicit alternate-0 transition are compatibility targets.
 
 ## Alternative considered: one endpoint per rate
 
@@ -193,10 +215,13 @@ per-format design is retained unless those tradeoffs become worthwhile.
 
 ## Verification policy
 
-Tests cover state behavior and fractional silence cadence. Tests that merely
-repeat constants, descriptor mappings, or round-trip a closed enum are omitted;
-the values are derived from `PCM_FORMATS` instead. A mock USB driver also cannot
-establish real isochronous timing or host interoperability. Builds, checks, and
-Clippy are the routine verification, while probe/real-device tests are useful
-when the attached probe is healthy but are not treated as exhaustive models of
-host behavior.
+Tests cover independent endpoint state, Watch notifications, format/rate queue
+mapping, drop-oldest behavior, and fractional silence cadence. A mock USB driver
+still cannot establish real isochronous timing or host interoperability. Builds,
+checks, and Clippy are the routine verification, while probe/real-device tests
+are useful when the attached probe is healthy but are not treated as exhaustive
+models of host behavior. Real-host smoke testing should include, when the host
+exposes it, a Windows-style reconfiguration that stops URBs without explicitly
+selecting alternate 0. The check is only that streaming resumes at the selected
+format and rate; the accepted boundary packet is not treated as a failure, and
+continuous-traffic `SET_CUR` is not a supported test case.
