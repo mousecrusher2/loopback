@@ -14,34 +14,57 @@ pub(crate) type AudioPacket = Vec<u8, { spec::MAX_AUDIO_PACKET_BYTES }>;
 
 // All accesses stay on core 0's thread-mode executor. ThreadModeMutex does not
 // provide exclusion against RP2350 core 1 or interrupt-context access.
+struct AudioQueueState {
+    packets: Deque<AudioPacket, { spec::PACKET_QUEUE_CAPACITY }>,
+    loss_pending: bool,
+}
+
+impl AudioQueueState {
+    const fn new() -> Self {
+        Self {
+            packets: Deque::new(),
+            loss_pending: false,
+        }
+    }
+}
+
 pub(crate) struct AudioQueue {
-    packets: ThreadModeMutex<RefCell<Deque<AudioPacket, { spec::PACKET_QUEUE_CAPACITY }>>>,
+    state: ThreadModeMutex<RefCell<AudioQueueState>>,
 }
 
 impl AudioQueue {
     const fn new() -> Self {
         Self {
-            packets: ThreadModeMutex::new(RefCell::new(Deque::new())),
+            state: ThreadModeMutex::new(RefCell::new(AudioQueueState::new())),
         }
     }
 
     fn push(&self, packet: AudioPacket) {
-        self.packets.lock(|packets| {
-            let mut packets = packets.borrow_mut();
-            if let Err(packet) = packets.push_back(packet) {
-                assert!(packets.pop_front().is_some());
-                assert!(packets.push_back(packet).is_ok());
+        self.state.lock(|state| {
+            let mut state = state.borrow_mut();
+            if let Err(packet) = state.packets.push_back(packet) {
+                assert!(state.packets.pop_front().is_some());
+                assert!(state.packets.push_back(packet).is_ok());
+                state.loss_pending = true;
             }
         });
     }
 
-    fn pop(&self) -> Option<AudioPacket> {
-        self.packets
-            .lock(|packets| packets.borrow_mut().pop_front())
+    fn pop(&self) -> (Option<AudioPacket>, bool) {
+        self.state.lock(|state| {
+            let mut state = state.borrow_mut();
+            let loss_pending = state.loss_pending;
+            state.loss_pending = false;
+            (state.packets.pop_front(), loss_pending)
+        })
     }
 
     fn clear(&self) {
-        self.packets.lock(|packets| packets.borrow_mut().clear());
+        self.state.lock(|state| {
+            let mut state = state.borrow_mut();
+            state.packets.clear();
+            state.loss_pending = false;
+        });
     }
 }
 
@@ -195,7 +218,11 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
         if let EndpointRate::Configured(rate) = current_rate {
             let queue = audio_queue(queues, slot, rate)
                 .expect("configured endpoint rate has an audio queue");
-            if let Some(packet) = queue.pop() {
+            let (packet, loss_pending) = queue.pop();
+            if loss_pending {
+                diagnostics::record_in_loss();
+            }
+            if let Some(packet) = packet {
                 match endpoint.write(packet.as_slice()).await {
                     Ok(()) | Err(EndpointError::Disabled) => continue,
                     Err(EndpointError::BufferOverflow) => return,
@@ -283,19 +310,30 @@ mod tests {
     }
 
     #[test]
-    fn full_queue_discards_only_the_oldest_packet() {
+    fn full_queue_discards_oldest_and_reports_loss_once() {
         let queue = AudioQueue::new();
         for value in 0..=spec::PACKET_QUEUE_CAPACITY {
             queue.push(packet(u8::try_from(value).unwrap()));
         }
 
         for value in 1..=spec::PACKET_QUEUE_CAPACITY {
-            assert_eq!(
-                queue.pop().unwrap().as_slice(),
-                &[u8::try_from(value).unwrap()]
-            );
+            let (packet, loss_pending) = queue.pop();
+            assert_eq!(packet.unwrap().as_slice(), &[u8::try_from(value).unwrap()]);
+            assert_eq!(loss_pending, value == 1);
         }
-        assert!(queue.pop().is_none());
+        assert_eq!(queue.pop(), (None, false));
+    }
+
+    #[test]
+    fn clearing_queue_clears_pending_loss() {
+        let queue = AudioQueue::new();
+        for value in 0..=spec::PACKET_QUEUE_CAPACITY {
+            queue.push(packet(u8::try_from(value).unwrap()));
+        }
+
+        queue.clear();
+
+        assert_eq!(queue.pop(), (None, false));
     }
 
     #[test]

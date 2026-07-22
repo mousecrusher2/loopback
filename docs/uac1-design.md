@@ -145,10 +145,13 @@ while OUT continues. Packet storage for all ten queues is approximately
 
 Isochronous OUT cannot be backpressured and retried. `AudioQueue::push` removes
 exactly the oldest packet when the queue is full, then inserts the newly received
-packet within one synchronous borrow. The queue therefore retains the newest eight
-packets, although up to seven packets of latency can remain after IN resumes.
-USB `BufferOverflow` is treated as a broken internal MPS invariant and the
-affected task exits.
+packet and sets a sticky loss flag within one synchronous borrow. The queue
+therefore retains the newest eight packets, although up to seven packets of
+latency can remain after IN resumes. An enabled IN task consumes the flag when it
+next reads that queue and reports the loss to the LED diagnostic. Clearing a
+queue also clears its flag, so overflows accumulated before that IN selection do
+not produce a stale diagnostic. USB `BufferOverflow` is treated as a broken
+internal MPS invariant and the affected task exits.
 
 ## Alternate and rate transitions
 
