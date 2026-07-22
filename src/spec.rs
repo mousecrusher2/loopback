@@ -35,11 +35,52 @@ pub(crate) const PCM_FORMATS: &[PcmFormat] = &[
 ];
 
 pub(crate) const FORMAT_COUNT: usize = PCM_FORMATS.len();
-pub(crate) const FORMAT_RATE_COUNT: usize = format_rate_count();
-pub(crate) const MAX_AUDIO_PACKET_BYTES: usize = max_audio_packet_bytes();
-pub(crate) const MAX_RATES_PER_FORMAT: usize = max_rates_per_format();
+pub(crate) const FORMAT_RATE_COUNT: usize = {
+    let mut total = 0;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        total += PCM_FORMATS[slot].rates.len();
+        slot += 1;
+    }
+    total
+};
+pub(crate) const MAX_AUDIO_PACKET_BYTES: usize = {
+    let mut maximum = 0;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        let packet_size = PCM_FORMATS[slot].max_packet_size() as usize;
+        if packet_size > maximum {
+            maximum = packet_size;
+        }
+        slot += 1;
+    }
+    maximum
+};
+pub(crate) const MAX_RATES_PER_FORMAT: usize = {
+    let mut maximum = 0;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        let rate_count = PCM_FORMATS[slot].rates.len();
+        if rate_count > maximum {
+            maximum = rate_count;
+        }
+        slot += 1;
+    }
+    maximum
+};
 pub(crate) const FORMAT_DESCRIPTOR_CAPACITY: usize = 6 + 3 * MAX_RATES_PER_FORMAT;
-pub(crate) const CONFIG_DESCRIPTOR_CAPACITY: usize = config_descriptor_capacity();
+pub(crate) const CONFIG_DESCRIPTOR_CAPACITY: usize = {
+    // Configuration, IAD, AudioControl, and both zero-bandwidth interfaces.
+    let mut total = 96;
+    let mut slot = 0;
+    while slot < FORMAT_COUNT {
+        // Each direction has one interface, AS general, format, standard endpoint,
+        // and class-specific endpoint descriptor for this format.
+        total += 2 * (40 + 3 * PCM_FORMATS[slot].rates.len());
+        slot += 1;
+    }
+    total
+};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum StreamDirection {
@@ -170,53 +211,4 @@ pub(crate) const fn format_slot_by_alternate_setting(alternate_setting: u8) -> O
     } else {
         Some(alternate_setting as usize - 1)
     }
-}
-
-const fn max_audio_packet_bytes() -> usize {
-    let mut maximum = 0;
-    let mut slot = 0;
-    while slot < FORMAT_COUNT {
-        let packet_size = PCM_FORMATS[slot].max_packet_size() as usize;
-        if packet_size > maximum {
-            maximum = packet_size;
-        }
-        slot += 1;
-    }
-    maximum
-}
-
-const fn format_rate_count() -> usize {
-    let mut total = 0;
-    let mut slot = 0;
-    while slot < FORMAT_COUNT {
-        total += PCM_FORMATS[slot].rates.len();
-        slot += 1;
-    }
-    total
-}
-
-const fn max_rates_per_format() -> usize {
-    let mut maximum = 0;
-    let mut slot = 0;
-    while slot < FORMAT_COUNT {
-        let rate_count = PCM_FORMATS[slot].rates.len();
-        if rate_count > maximum {
-            maximum = rate_count;
-        }
-        slot += 1;
-    }
-    maximum
-}
-
-const fn config_descriptor_capacity() -> usize {
-    // Configuration, IAD, AudioControl, and both zero-bandwidth interfaces.
-    let mut total = 96;
-    let mut slot = 0;
-    while slot < FORMAT_COUNT {
-        // Each direction has one interface, AS general, format, standard endpoint,
-        // and class-specific endpoint descriptor for this format.
-        total += 2 * (40 + 3 * PCM_FORMATS[slot].rates.len());
-        slot += 1;
-    }
-    total
 }
