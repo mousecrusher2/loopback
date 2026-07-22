@@ -134,20 +134,23 @@ accesses queue state. `ThreadModeMutex` relies on this single-core restriction
 and does not provide cross-core exclusion. If a queue is later accessed from an
 interrupt or core 1, its synchronization must be replaced.
 
-Each queue stores owned `heapless::Vec` packets with a fixed 582-byte capacity
-and runtime payload length. OUT must read into a task-local packet before it can
-observe the rate that won the control/read ordering and choose a destination
-queue. Moving the packet into the queue and later into the IN task adds two
-full inline-packet moves, approximately 1.18 MB/s at one packet per millisecond.
-That load is accepted for RP2350. A later optimization may store handles to a
-static packet pool in the queues, but that ownership protocol is not
-part of this implementation.
+The packet payloads live in a static `heapless::Box` pool containing 100
+`BoxBlock<AudioPacket>` blocks. `AudioPacket` remains a `heapless::Vec` with a
+fixed 582-byte capacity and runtime payload length. OUT obtains a block and
+reads directly into it before observing the rate that won the control/read
+ordering and choosing a destination queue. The queue and IN task then transfer
+only the pointer-sized `Box` handle; the payload remains in the same block until
+IN completes or the packet is discarded. Dropping a packet returns its block to
+the pool.
 
-Each format/rate queue has eight slots. Capacity does not add latency while
-OUT and IN advance at the same rate; normal depth is determined by their frame
-phase. Eight slots bound the backlog left by a short interval in which IN stops
-while OUT continues. Packet storage for all ten queues is approximately
-47 KiB.
+Each format/rate queue has eight handle slots. Capacity does not add latency
+while OUT and IN advance at the same rate; normal depth is determined by their
+frame phase. Eight slots bound the backlog left by a short interval in which IN
+stops while OUT continues. All ten queues can hold 80 packets. The 100-block
+pool additionally covers packets held by endpoint operations and leaves spare
+capacity for future changes. Its blocks reserve approximately 58 KiB; the
+queues themselves store only handles. Pool exhaustion is an internal invariant
+failure.
 
 Isochronous OUT cannot be backpressured and retried. `AudioQueue::push` removes
 exactly the oldest packet when the queue is full, then inserts the newly received

@@ -1,9 +1,10 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, mem::MaybeUninit};
 
 use embassy_sync::blocking_mutex::ThreadModeMutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
+use heapless::pool::boxed::{Box, BoxBlock};
 use heapless::{Deque, Vec};
 use static_cell::StaticCell;
 
@@ -12,10 +13,36 @@ use crate::spec::{self, DEFAULT_RATE, SampleRate, StreamDirection};
 
 pub(crate) type AudioPacket = Vec<u8, { spec::MAX_AUDIO_PACKET_BYTES }>;
 
+const AUDIO_PACKET_POOL_CAPACITY: usize = 100;
+
+heapless::box_pool!(AudioPacketPool: AudioPacket);
+
+type PooledAudioPacket = Box<AudioPacketPool>;
+
+static AUDIO_PACKET_BLOCKS: StaticCell<[BoxBlock<AudioPacket>; AUDIO_PACKET_POOL_CAPACITY]> =
+    StaticCell::new();
+
+fn init_audio_packet_pool() {
+    let Some(blocks) = AUDIO_PACKET_BLOCKS.try_uninit() else {
+        return;
+    };
+    let blocks: &'static mut [MaybeUninit<BoxBlock<AudioPacket>>; AUDIO_PACKET_POOL_CAPACITY] =
+        blocks.as_mut();
+    for block in blocks {
+        AudioPacketPool.manage(block.write(BoxBlock::new()));
+    }
+}
+
+fn allocate_audio_packet() -> PooledAudioPacket {
+    AudioPacketPool
+        .alloc(AudioPacket::new())
+        .expect("audio packet pool is exhausted")
+}
+
 // All accesses stay on core 0's thread-mode executor. ThreadModeMutex does not
 // provide exclusion against RP2350 core 1 or interrupt-context access.
 struct AudioQueueState {
-    packets: Deque<AudioPacket, { spec::PACKET_QUEUE_CAPACITY }>,
+    packets: Deque<PooledAudioPacket, { spec::PACKET_QUEUE_CAPACITY }>,
     loss_pending: bool,
 }
 
@@ -41,7 +68,7 @@ impl AudioQueue {
         }
     }
 
-    fn push(&self, packet: AudioPacket) {
+    fn push(&self, packet: PooledAudioPacket) {
         self.state.lock(|state| {
             let mut state = state.borrow_mut();
             if let Err(packet) = state.packets.push_back(packet) {
@@ -52,7 +79,7 @@ impl AudioQueue {
         });
     }
 
-    fn pop(&self) -> (Option<AudioPacket>, bool) {
+    fn pop(&self) -> (Option<PooledAudioPacket>, bool) {
         self.state.lock(|state| {
             let mut state = state.borrow_mut();
             let loss_pending = state.loss_pending;
@@ -145,6 +172,7 @@ impl EndpointRateWatches {
 
 pub(crate) fn init_audio_queues() -> &'static AudioQueues {
     static QUEUES: StaticCell<AudioQueues> = StaticCell::new();
+    init_audio_packet_pool();
     let mut rates = spec::PCM_FORMATS
         .iter()
         .flat_map(|format| format.rates.iter().copied());
@@ -173,7 +201,7 @@ pub(crate) async fn playback_task<'d, D: Driver<'d>>(
     loop {
         endpoint.wait_enabled().await;
 
-        let mut packet = AudioPacket::new();
+        let mut packet = allocate_audio_packet();
         packet
             .resize(max_packet_size, 0)
             .expect("format MPS fits the audio packet");
@@ -301,14 +329,32 @@ impl PacketClock {
 #[embedded_test::tests]
 mod tests {
     use super::{
-        AudioPacket, AudioQueue, EndpointRate, EndpointRateWatches, PacketClock, audio_queue,
+        AUDIO_PACKET_POOL_CAPACITY, AudioPacket, AudioPacketPool, AudioQueue, EndpointRate,
+        EndpointRateWatches, PacketClock, PooledAudioPacket, allocate_audio_packet, audio_queue,
+        init_audio_packet_pool,
     };
     use crate::spec::{self, SampleRate, StreamDirection, format_by_endpoint_slot};
 
-    fn packet(value: u8) -> AudioPacket {
-        let mut packet = AudioPacket::new();
+    fn packet(value: u8) -> PooledAudioPacket {
+        init_audio_packet_pool();
+        let mut packet = allocate_audio_packet();
         packet.push(value).unwrap();
         packet
+    }
+
+    #[test]
+    fn packet_pool_reuses_dropped_blocks() {
+        init_audio_packet_pool();
+        let mut packets: heapless::Vec<PooledAudioPacket, AUDIO_PACKET_POOL_CAPACITY> =
+            heapless::Vec::new();
+        for _ in 0..AUDIO_PACKET_POOL_CAPACITY {
+            packets.push(allocate_audio_packet()).unwrap();
+        }
+
+        assert!(AudioPacketPool.alloc(AudioPacket::new()).is_err());
+        let packet = packets.pop().unwrap();
+        drop(packet);
+        assert!(AudioPacketPool.alloc(AudioPacket::new()).is_ok());
     }
 
     #[test]
