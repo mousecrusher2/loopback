@@ -7,9 +7,10 @@ use crate::board::{self, UsbDriver};
 use crate::control::AudioControl;
 use crate::descriptors::{AudioEndpoints, build_audio_function};
 use crate::diagnostics::loss_led_task;
+use crate::spec::{PcmFormat, StreamDirection};
 use crate::streams::{
-    AudioQueues, EndpointRateReceiver, EndpointRateWatches, capture_task, init_audio_queues,
-    init_endpoint_rate_watches, playback_task,
+    AudioQueue, AudioQueues, EndpointRateReceiver, EndpointRateWatch, EndpointRateWatches,
+    capture_task, init_audio_queues, init_endpoint_rate_watches, playback_task,
 };
 
 pub(crate) fn run(spawner: Spawner) {
@@ -74,17 +75,30 @@ fn spawn_usb(
 ) {
     let playback = endpoints.playback;
     let capture = endpoints.capture;
+    let mut remaining_queues: &'static [AudioQueue] = queues;
 
     spawner.spawn(usb_task(usb_device).unwrap());
     // Each endpoint keeps a persistent task. This avoids dynamically dispatching
     // or cancelling endpoint futures when the host changes alternate settings.
-    for (slot, (playback, capture)) in playback.into_iter().zip(capture).enumerate() {
+    for (slot, ((playback, capture), format)) in playback
+        .into_iter()
+        .zip(capture)
+        .zip(crate::spec::PCM_FORMATS)
+        .enumerate()
+    {
+        let format_queues = remaining_queues
+            .split_off(..format.rates.len())
+            .expect("one queue exists for each advertised format rate");
+        let rate_watch = rates
+            .watch(StreamDirection::Playback, slot)
+            .expect("one rate Watch exists for each playback endpoint");
         let rate_updates = rates
             .capture_receiver(slot)
             .expect("one rate receiver exists for each capture endpoint");
-        spawner.spawn(playback_endpoint_task(slot, playback, rates, queues).unwrap());
-        spawner.spawn(capture_endpoint_task(slot, capture, rate_updates, queues).unwrap());
+        spawner.spawn(playback_endpoint_task(playback, format, rate_watch, format_queues).unwrap());
+        spawner.spawn(capture_endpoint_task(capture, format, rate_updates, format_queues).unwrap());
     }
+    assert!(remaining_queues.is_empty());
 }
 
 #[embassy_executor::task]
@@ -94,20 +108,20 @@ async fn usb_task(mut usb_device: usb::UsbDevice<'static, UsbDriver>) {
 
 #[embassy_executor::task(pool_size = crate::spec::FORMAT_COUNT)]
 async fn playback_endpoint_task(
-    slot: usize,
     endpoint: <UsbDriver as Driver<'static>>::EndpointOut,
-    rates: &'static EndpointRateWatches,
-    queues: &'static AudioQueues,
+    format: &'static PcmFormat,
+    rate_watch: &'static EndpointRateWatch,
+    queues: &'static [AudioQueue],
 ) {
-    playback_task::<UsbDriver>(slot, endpoint, rates, queues).await;
+    playback_task::<UsbDriver>(endpoint, format, rate_watch, queues).await;
 }
 
 #[embassy_executor::task(pool_size = crate::spec::FORMAT_COUNT)]
 async fn capture_endpoint_task(
-    slot: usize,
     endpoint: <UsbDriver as Driver<'static>>::EndpointIn,
+    format: &'static PcmFormat,
     rate_updates: EndpointRateReceiver,
-    queues: &'static AudioQueues,
+    queues: &'static [AudioQueue],
 ) {
-    capture_task::<UsbDriver>(slot, endpoint, rate_updates, queues).await;
+    capture_task::<UsbDriver>(endpoint, format, rate_updates, queues).await;
 }

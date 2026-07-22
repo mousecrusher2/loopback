@@ -172,26 +172,6 @@ pub(crate) const fn format_slot_by_alternate_setting(alternate_setting: u8) -> O
     }
 }
 
-pub(crate) fn audio_queue_index(format_slot: usize, rate: SampleRate) -> Option<usize> {
-    let format = format_by_endpoint_slot(format_slot)?;
-    let mut offset = 0;
-    let mut slot = 0;
-    while slot < format_slot {
-        offset += PCM_FORMATS[slot].rates.len();
-        slot += 1;
-    }
-
-    let mut rate_slot = 0;
-    while rate_slot < format.rates.len() {
-        if format.rates[rate_slot] == rate {
-            return Some(offset + rate_slot);
-        }
-        rate_slot += 1;
-    }
-
-    None
-}
-
 const fn max_audio_packet_bytes() -> usize {
     let mut maximum = 0;
     let mut slot = 0;

@@ -29,12 +29,14 @@ impl AudioQueueState {
 }
 
 pub(crate) struct AudioQueue {
+    rate: SampleRate,
     state: ThreadModeMutex<RefCell<AudioQueueState>>,
 }
 
 impl AudioQueue {
-    const fn new() -> Self {
+    const fn new(rate: SampleRate) -> Self {
         Self {
+            rate,
             state: ThreadModeMutex::new(RefCell::new(AudioQueueState::new())),
         }
     }
@@ -143,7 +145,14 @@ impl EndpointRateWatches {
 
 pub(crate) fn init_audio_queues() -> &'static AudioQueues {
     static QUEUES: StaticCell<AudioQueues> = StaticCell::new();
-    QUEUES.init(core::array::from_fn(|_| AudioQueue::new()))
+    let mut rates = spec::PCM_FORMATS
+        .iter()
+        .flat_map(|format| format.rates.iter().copied());
+    let queues = core::array::from_fn(|_| {
+        AudioQueue::new(rates.next().expect("one rate exists for each audio queue"))
+    });
+    assert!(rates.next().is_none());
+    QUEUES.init(queues)
 }
 
 pub(crate) fn init_endpoint_rate_watches() -> &'static EndpointRateWatches {
@@ -152,13 +161,11 @@ pub(crate) fn init_endpoint_rate_watches() -> &'static EndpointRateWatches {
 }
 
 pub(crate) async fn playback_task<'d, D: Driver<'d>>(
-    slot: usize,
     mut endpoint: D::EndpointOut,
-    rates: &'static EndpointRateWatches,
-    queues: &'static AudioQueues,
+    format: &'static spec::PcmFormat,
+    rate_watch: &'static EndpointRateWatch,
+    queues: &'static [AudioQueue],
 ) {
-    let format =
-        spec::format_by_endpoint_slot(slot).expect("playback task has a valid format slot");
     let max_packet_size = format.max_packet_size() as usize;
 
     // The destination rate is chosen only after the OUT read completes. This
@@ -179,11 +186,10 @@ pub(crate) async fn playback_task<'d, D: Driver<'d>>(
         if len == 0 || !len.is_multiple_of(format.audio_frame_bytes()) {
             continue;
         }
-        let Some(EndpointRate::Configured(rate)) = rates.current(StreamDirection::Playback, slot)
-        else {
+        let Some(EndpointRate::Configured(rate)) = rate_watch.try_get() else {
             continue;
         };
-        let Some(queue) = audio_queue(queues, slot, rate) else {
+        let Some(queue) = audio_queue(queues, rate) else {
             continue;
         };
 
@@ -193,17 +199,16 @@ pub(crate) async fn playback_task<'d, D: Driver<'d>>(
 }
 
 pub(crate) async fn capture_task<'d, D: Driver<'d>>(
-    slot: usize,
     mut endpoint: D::EndpointIn,
+    format: &'static spec::PcmFormat,
     mut rate_updates: EndpointRateReceiver,
-    queues: &'static AudioQueues,
+    queues: &'static [AudioQueue],
 ) {
-    let format = spec::format_by_endpoint_slot(slot).expect("capture task has a valid format slot");
     let mut current_rate = rate_updates.try_get().unwrap_or(EndpointRate::Unset);
     let mut silence = [0_u8; spec::MAX_AUDIO_PACKET_BYTES];
     let mut clock = PacketClock::new();
 
-    apply_capture_rate(queues, slot, current_rate, &mut clock);
+    apply_capture_rate(queues, current_rate, &mut clock);
 
     // One endpoint operation is started per wait_enabled() pass. A control
     // change never cancels an operation already handed to the USB driver.
@@ -212,12 +217,12 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
 
         if let Some(updated) = rate_updates.try_changed() {
             current_rate = updated;
-            apply_capture_rate(queues, slot, current_rate, &mut clock);
+            apply_capture_rate(queues, current_rate, &mut clock);
         }
 
         if let EndpointRate::Configured(rate) = current_rate {
-            let queue = audio_queue(queues, slot, rate)
-                .expect("configured endpoint rate has an audio queue");
+            let queue =
+                audio_queue(queues, rate).expect("configured endpoint rate has an audio queue");
             let (packet, loss_pending) = queue.pop();
             if loss_pending {
                 diagnostics::record_in_loss();
@@ -245,19 +250,14 @@ pub(crate) async fn capture_task<'d, D: Driver<'d>>(
     }
 }
 
-fn audio_queue(queues: &AudioQueues, format_slot: usize, rate: SampleRate) -> Option<&AudioQueue> {
-    spec::audio_queue_index(format_slot, rate).and_then(|index| queues.get(index))
+fn audio_queue(queues: &[AudioQueue], rate: SampleRate) -> Option<&AudioQueue> {
+    queues.iter().find(|queue| queue.rate == rate)
 }
 
-fn apply_capture_rate(
-    queues: &AudioQueues,
-    format_slot: usize,
-    rate: EndpointRate,
-    clock: &mut PacketClock,
-) {
+fn apply_capture_rate(queues: &[AudioQueue], rate: EndpointRate, clock: &mut PacketClock) {
     clock.reset();
     if let EndpointRate::Configured(rate) = rate {
-        audio_queue(queues, format_slot, rate)
+        audio_queue(queues, rate)
             .expect("configured endpoint rate has an audio queue")
             .clear();
     }
@@ -300,7 +300,9 @@ impl PacketClock {
 #[cfg(test)]
 #[embedded_test::tests]
 mod tests {
-    use super::{AudioPacket, AudioQueue, EndpointRate, EndpointRateWatches, PacketClock};
+    use super::{
+        AudioPacket, AudioQueue, EndpointRate, EndpointRateWatches, PacketClock, audio_queue,
+    };
     use crate::spec::{self, SampleRate, StreamDirection, format_by_endpoint_slot};
 
     fn packet(value: u8) -> AudioPacket {
@@ -311,7 +313,7 @@ mod tests {
 
     #[test]
     fn full_queue_discards_oldest_and_reports_loss_once() {
-        let queue = AudioQueue::new();
+        let queue = AudioQueue::new(SampleRate::R48000);
         for value in 0..=spec::PACKET_QUEUE_CAPACITY {
             queue.push(packet(u8::try_from(value).unwrap()));
         }
@@ -326,7 +328,7 @@ mod tests {
 
     #[test]
     fn clearing_queue_clears_pending_loss() {
-        let queue = AudioQueue::new();
+        let queue = AudioQueue::new(SampleRate::R48000);
         for value in 0..=spec::PACKET_QUEUE_CAPACITY {
             queue.push(packet(u8::try_from(value).unwrap()));
         }
@@ -362,17 +364,33 @@ mod tests {
     }
 
     #[test]
-    fn advertised_format_rates_have_unique_queues() {
-        let mut seen = [false; spec::FORMAT_RATE_COUNT];
-        for (format_slot, format) in spec::PCM_FORMATS.iter().enumerate() {
-            for &rate in format.rates {
-                let queue = spec::audio_queue_index(format_slot, rate).unwrap();
-                assert!(!seen[queue]);
-                seen[queue] = true;
+    fn advertised_format_rates_select_direct_queue_slices() {
+        let mut rates = spec::PCM_FORMATS
+            .iter()
+            .flat_map(|format| format.rates.iter().copied());
+        let queues: [AudioQueue; spec::FORMAT_RATE_COUNT] = core::array::from_fn(|_| {
+            AudioQueue::new(rates.next().expect("one rate exists for each audio queue"))
+        });
+        assert!(rates.next().is_none());
+        let mut remaining = queues.as_slice();
+        let mut offset = 0;
+
+        for format in spec::PCM_FORMATS {
+            let format_queues = remaining
+                .split_off(..format.rates.len())
+                .expect("one queue exists for each advertised format rate");
+            for (rate_slot, &rate) in format.rates.iter().enumerate() {
+                let selected = audio_queue(format_queues, rate).unwrap();
+                let expected = queues.get(offset + rate_slot).unwrap();
+                assert_eq!(core::ptr::from_ref(selected), core::ptr::from_ref(expected));
             }
+            offset += format.rates.len();
         }
-        assert!(seen.into_iter().all(|value| value));
-        assert_eq!(spec::audio_queue_index(2, SampleRate::R96000), None);
+
+        assert!(remaining.is_empty());
+        let format = format_by_endpoint_slot(2).unwrap();
+        let format_queues = &queues[spec::FORMAT_RATE_COUNT - format.rates.len()..];
+        assert!(audio_queue(format_queues, SampleRate::R96000).is_none());
     }
 
     #[test]

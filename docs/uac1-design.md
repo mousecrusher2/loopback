@@ -115,11 +115,17 @@ is spawned. This prevents an inactive endpoint task from using another format's
 larger MPS. Such a mismatch can make an endpoint return `BufferOverflow`
 immediately and create an executor-starving retry loop.
 
+Task startup resolves the format slot into the actual `PcmFormat`, endpoint rate
+Watch or receiver, and the queue slice for that format. Endpoint tasks retain
+those references directly and do not use a global slot to look resources up.
+
 A single dynamic dispatcher is intentionally not used. Persistent per-endpoint
 tasks fit Embassy's execution model, and RP2350 has ample RAM for them. The ten
 advertised format/rate combinations map to ten bounded `AudioQueue` instances.
 Each queue wraps a `heapless::Deque` in a `ThreadModeMutex<RefCell<_>>` and
-exposes only synchronous `push`, `pop`, and `clear` operations. The mapping and
+stores its immutable sample rate alongside it. It exposes only synchronous
+`push`, `pop`, and `clear` operations, and a format-specific queue slice can
+therefore select a queue by rate without consulting `PcmFormat`. The mapping and
 queue count are derived from `PCM_FORMATS`.
 
 Both endpoint tasks run on the same core 0 thread-mode executor, and USB
