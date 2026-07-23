@@ -203,8 +203,10 @@ packet is accepted, but streaming should resume using the newly selected
 format and rate. A host that continues submitting isochronous transfers across
 `SET_CUR` is explicitly unsupported. Requiring the transfers to stop still
 leaves room for a future controller-specific abort and DPRAM flush to provide a
-strict boundary without also supporting live-stream `SET_CUR`. Unsupported
-rates and rates not advertised by the addressed endpoint are rejected.
+strict boundary without also supporting live-stream `SET_CUR`. A requested
+rate not advertised by the addressed endpoint is rounded to that endpoint's
+closest advertised rate, as required by UAC1. Equal-distance ties select the
+lower rate.
 
 The class-specific endpoint descriptor advertises Sampling Frequency Control.
 `SET_CUR` changes the addressed physical endpoint's Watch. `GET_CUR` returns its

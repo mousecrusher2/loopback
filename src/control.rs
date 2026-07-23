@@ -64,8 +64,14 @@ impl AudioControl {
     }
 }
 
-fn endpoint_address(index: u16) -> EndpointAddress {
-    EndpointAddress::from(index.to_le_bytes()[0])
+fn endpoint_address(index: u16) -> Option<EndpointAddress> {
+    let [address, entity_id] = index.to_le_bytes();
+    (entity_id == 0).then(|| EndpointAddress::from(address))
+}
+
+fn is_sampling_frequency_control(value: u16) -> bool {
+    let [reserved, control_selector] = value.to_le_bytes();
+    reserved == 0 && control_selector == SAMPLING_FREQ_CONTROL
 }
 
 impl embassy_usb::Handler for AudioControl {
@@ -84,41 +90,38 @@ impl embassy_usb::Handler for AudioControl {
     }
 
     fn control_out(&mut self, req: Request, data: &[u8]) -> Option<OutResponse> {
-        let control_selector = (req.value >> 8) as u8;
-
-        if req.request_type != RequestType::Class
-            || req.recipient != Recipient::Endpoint
-            || req.request != SET_CUR
-            || control_selector != SAMPLING_FREQ_CONTROL
-        {
+        if req.request_type != RequestType::Class || req.recipient != Recipient::Endpoint {
             return None;
         }
 
-        let endpoint_address = endpoint_address(req.index);
-        let (rate_watch, format) = self.endpoint_format(endpoint_address)?;
-        let Some(rate) = requested_rate(data) else {
+        let Some(endpoint_address) = endpoint_address(req.index) else {
             return Some(OutResponse::Rejected);
         };
-        if !format.supports(rate) {
+        let (rate_watch, format) = self.endpoint_format(endpoint_address)?;
+        if req.request != SET_CUR || !is_sampling_frequency_control(req.value) {
             return Some(OutResponse::Rejected);
         }
+        let Some(requested_hz) = requested_frequency_hz(data) else {
+            return Some(OutResponse::Rejected);
+        };
+        let rate = closest_supported_rate(format, requested_hz);
         rate_watch.sender().send(EndpointRate::Configured(rate));
 
         Some(OutResponse::Accepted)
     }
 
     fn control_in<'a>(&'a mut self, req: Request, buf: &'a mut [u8]) -> Option<InResponse<'a>> {
-        let control_selector = (req.value >> 8) as u8;
-
-        if req.request_type != RequestType::Class
-            || req.recipient != Recipient::Endpoint
-            || control_selector != SAMPLING_FREQ_CONTROL
-        {
+        if req.request_type != RequestType::Class || req.recipient != Recipient::Endpoint {
             return None;
         }
 
-        let endpoint_address = endpoint_address(req.index);
+        let Some(endpoint_address) = endpoint_address(req.index) else {
+            return Some(InResponse::Rejected);
+        };
         let (rate_watch, endpoint_format) = self.endpoint_format(endpoint_address)?;
+        if !is_sampling_frequency_control(req.value) {
+            return Some(InResponse::Rejected);
+        }
         let Some(out) = buf.first_chunk_mut::<3>() else {
             return Some(InResponse::Rejected);
         };
@@ -149,20 +152,38 @@ fn get_or_configure_rate(rate_watch: &EndpointRateWatch, default: SampleRate) ->
     }
 }
 
-fn requested_rate(data: &[u8]) -> Option<SampleRate> {
-    let [b0, b1, b2] = *data.first_chunk::<3>()?;
-    if data.len() != 3 {
+fn requested_frequency_hz(data: &[u8]) -> Option<u32> {
+    let &[b0, b1, b2] = data else {
         return None;
+    };
+    Some(u32::from(b0) | (u32::from(b1) << 8) | (u32::from(b2) << 16))
+}
+
+fn closest_supported_rate(format: &PcmFormat, requested_hz: u32) -> SampleRate {
+    if let Some(rate) = SampleRate::from_hz(requested_hz)
+        && format.supports(rate)
+    {
+        return rate;
     }
-    let hz = u32::from(b0) | (u32::from(b1) << 8) | (u32::from(b2) << 16);
-    SampleRate::from_hz(hz)
+
+    format
+        .rates
+        .iter()
+        .copied()
+        .min_by_key(|rate| (rate.hz().abs_diff(requested_hz), rate.hz()))
+        .expect("each advertised PCM format has at least one sample rate")
 }
 
 #[cfg(test)]
 #[embedded_test::tests]
 mod tests {
-    use super::get_or_configure_rate;
-    use crate::spec::SampleRate;
+    use embassy_usb::driver::EndpointAddress;
+
+    use super::{
+        closest_supported_rate, endpoint_address, get_or_configure_rate,
+        is_sampling_frequency_control, requested_frequency_hz,
+    };
+    use crate::spec::{SampleRate, format_by_endpoint_slot};
     use crate::streams::{EndpointRate, EndpointRateWatch};
 
     #[test]
@@ -181,5 +202,33 @@ mod tests {
             get_or_configure_rate(&rate_watch, SampleRate::R44100),
             SampleRate::R48000
         );
+    }
+
+    #[test]
+    fn requested_frequency_is_rounded_to_the_closest_advertised_rate() {
+        let format = format_by_endpoint_slot(2).unwrap();
+
+        assert_eq!(closest_supported_rate(format, 48_000), SampleRate::R48000);
+        assert_eq!(closest_supported_rate(format, 47_999), SampleRate::R48000);
+        assert_eq!(closest_supported_rate(format, 88_200), SampleRate::R48000);
+        assert_eq!(closest_supported_rate(format, 1), SampleRate::R44100);
+        assert_eq!(closest_supported_rate(format, 46_050), SampleRate::R44100);
+    }
+
+    #[test]
+    fn endpoint_control_fields_are_validated() {
+        assert_eq!(endpoint_address(0x0081), Some(EndpointAddress::from(0x81)));
+        assert_eq!(endpoint_address(0x0181), None);
+
+        assert!(is_sampling_frequency_control(0x0100));
+        assert!(!is_sampling_frequency_control(0x0101));
+        assert!(!is_sampling_frequency_control(0x0200));
+    }
+
+    #[test]
+    fn sampling_frequency_parameter_must_be_exactly_three_bytes() {
+        assert_eq!(requested_frequency_hz(&[0x80, 0xbb, 0x00]), Some(48_000));
+        assert_eq!(requested_frequency_hz(&[0x80, 0xbb]), None);
+        assert_eq!(requested_frequency_hz(&[0x80, 0xbb, 0x00, 0x00]), None);
     }
 }
